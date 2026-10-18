@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<link rel="stylesheet" href="../docs/style.css">
+<title>Architecture and dependency assessment</title>
+<body>
+<header>
+<nav aria-label="Project documentation">
+<a href="../docs/index.html">Overpalancing documentation</a> · <a href="../adr/index.html">Decisions</a> · <a href="../specs/index.html">Specifications</a>
+</nav>
+</header>
+<main>
+<h1>Architecture and dependency assessment</h1>
+<p>Checked 2026-10-18. Proposed ADRs require owner-controlled approval.</p>
+<h2>Boundaries</h2>
+<p>The core crate owns deterministic domain data and future game rules. It has no Bevy or operating-system dependency. The app crate owns presentation, input, window lifecycle and platform entrypoints. One shared startup function serves desktop binaries and mobile libraries. Primitive rendering is sufficient for the first scene; assets will be requested with purpose and pixel dimensions when needed.</p>
+<h2>Bevy assessment</h2>
+<table>
+<thead>
+<tr>
+<th>Criterion</th>
+<th>Assessment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Version and activity</td>
+<td>0.20.0, released 2026-10-08, is the selected baseline. Pin and test upgrades rather than assuming API compatibility.</td>
+</tr>
+<tr>
+<td>Bus factor</td>
+<td>Organization-maintained with distributed contributors and public governance; materially lower single-maintainer risk than a personal engine. Maintainer concentration in specialized subsystems remains a risk; a numeric bus factor is not established.</td>
+</tr>
+<tr>
+<td>Reputation</td>
+<td>Established Rust ECS engine with official cross-platform examples and a public release process. Popularity is supporting evidence, not a safety guarantee.</td>
+</tr>
+<tr>
+<td>License</td>
+<td>MIT OR Apache-2.0; preserve required dependency notices for distribution.</td>
+</tr>
+<tr>
+<td>Alternatives</td>
+<td>Godot: mature editor and export pipeline, different engine ecosystem. Macroquad: smaller 2D surface, less integrated ECS. wgpu: rendering substrate requiring substantially more platform and engine work.</td>
+</tr>
+<tr>
+<td>Decision authority</td>
+<td>Rust and Bevy were selected by the owner. No new direct runtime crates are proposed.</td>
+</tr>
+</tbody>
+</table>
+<h2>Dependency risk register</h2>
+<p>The locked graph currently reports an unmaintained ttf-parser 0.25.1 dependency under <a href="https://rustsec.org/advisories/RUSTSEC-2026-0192">RUSTSEC-2026-0192</a>. cargo audit reports no known vulnerabilities. Keep this warning visible and check upstream replacements; an unmaintained warning alone does not establish an exploitable vulnerability. Audit and deny run continuously, with Renovate proposing dependency updates.</p>
+<h2>Platform evidence</h2>
+<p>Linux is the development platform. CI must build Windows, macOS, Android and iOS in addition to Linux. Compilation does not prove store packaging, signing, touch usability or device rendering; retain these as explicit release checks. MSRV runs on the nightly schedule using stable Rust 1.97.1; development uses stable Rust 1.99.0.</p>
+<h2>Sources</h2>
+<ul>
+<li>
+<a href="https://github.com/bevyengine/bevy/releases/tag/v0.20.0">Bevy release</a>
+</li>
+<li>
+<a href="https://github.com/bevyengine/bevy/blob/v0.20.0/Cargo.toml">Manifest, license and features</a>
+</li>
+<li>
+<a href="https://github.com/bevyengine/bevy/tree/v0.20.0/examples/mobile">Mobile entrypoint example</a>
+</li>
+<li>
+<a href="https://bevy.org/community/">Bevy community</a>
+</li>
+<li>
+<a href="https://github.com/godotengine/godot">Godot</a>
+</li>
+<li>
+<a href="https://github.com/not-fl3/macroquad">Macroquad</a>
+</li>
+<li>
+<a href="https://github.com/gfx-rs/wgpu">wgpu</a>
+</li>
+</ul>
+</main>
+</body>
+</html>

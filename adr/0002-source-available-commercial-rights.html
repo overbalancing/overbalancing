@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<link rel="stylesheet" href="../docs/style.css">
+<title>ADR 0002: Distribution rights</title>
+<body>
+<header>
+<nav aria-label="Project documentation">
+<a href="../docs/index.html">Overpalancing documentation</a> · <a href="../adr/index.html">Decisions</a> · <a href="../specs/index.html">Specifications</a>
+</nav>
+</header>
+<main>
+<h1>ADR 0002: Public source and reserved commercial rights</h1>
+<p>Status: proposed. Date: 2026-10-18. Only Marc-Hendric Lühr may merge a change setting this ADR to approved.</p>
+<h2>Context</h2>
+<p>The source is public, but the owner reserves commercial use and intends to sell the game on Steam, Google Play and Apple's App Store.</p>
+<h2>Decision proposal</h2>
+<p>Use the project-specific <a href="../LICENSE.html">source-available noncommercial license</a>. Do not label the project open source or use an OSI license identifier. Public availability does not grant commercial redistribution rights. Contributions must preserve the owner's commercial distribution rights as specified in that license.</p>
+<h2>Consequences</h2>
+<p>Dependency and asset licenses remain independent. Maintain notices and inspect redistribution obligations for every release. The architect must review each proposed crate's license and alternatives; the owner confirms technology selection. Store publication and external contributions warrant review of the concrete legal terms before acceptance or sale.</p>
+<h2>Alternatives</h2>
+<p>MIT and Apache-2.0 permit third-party commercial use and therefore do not satisfy the owner's requirement. A proprietary closed repository would satisfy exclusivity but not public source availability. A project-specific source-available license expresses the requested combination and requires careful maintenance.</p>
+</main>
+</body>
+</html>

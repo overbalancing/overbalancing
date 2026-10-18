@@ -1,0 +1,4 @@
+# Configure a ruleset requiring code owner review; this file alone is advisory.
+/adr/ @Th3Link
+/.github/ @Th3Link
+/LICENSE.html @Th3Link

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project foundation — Design · Overpalancing</title>
+<link rel="stylesheet" href="../../../docs/style.css">
+</head>
+<body>
+<header>
+<a href="../../../docs/index.html">Overpalancing documentation</a>
+</header>
+<main>
+<h1>Project foundation — Design</h1>
+<nav aria-label="Change documents">
+<a href="proposal.html">Proposal</a> · <a href="design.html">Design</a> · <a href="tasks.html">Tasks</a> · <a href="scenarios.html">Scenarios</a> · <a href="../../index.html">All specifications</a>
+</nav>
+<h2>Structure</h2>
+<p>Separate platform presentation from reusable game-domain logic. Keep <code>adr/</code>, <code>specs/</code> and <code>docs/</code> as sibling documentation roots. Publish their paths intact alongside generated <code>api/</code> rustdoc.</p>
+<h2>Automation</h2>
+<p>Provide Renovate, audit, nextest, dependency deny, formatting, Clippy, scheduled MSRV and documentation deployment. Include Linux, Windows, macOS, iOS and Android build coverage. The MSRV schedule runs nightly using the declared minimum stable toolchain.</p>
+<h2>Rights and decisions</h2>
+<p>Source is public; commercial use is reserved to Marc-Hendric Lühr. Store distribution is intended for Steam, Apple App Store and Google Play. License wording and store compatibility require explicit review; do not label the project open source.</p>
+</main>
+<footer>Overpalancing · Source-available game</footer>
+</body>
+</html>

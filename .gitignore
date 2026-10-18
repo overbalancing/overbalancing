@@ -8,3 +8,6 @@
 *.apk
 *.aab
 *.ipa
+
+__pycache__/
+*.pyc

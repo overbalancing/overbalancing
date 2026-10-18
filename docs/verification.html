@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../docs/style.css">
+<title>Verification evidence</title>
+<header>
+<nav aria-label="Project documentation">
+<a href="../docs/index.html">Overpalancing documentation</a> · <a href="../adr/index.html">Decisions</a> · <a href="../specs/index.html">Specifications</a>
+</nav>
+</header>
+<main>
+<h1>Verification evidence</h1>
+<p>Updated 2026-10-18. Evidence is recorded per change; compilation is not evidence of a device launch.</p>
+<table>
+<caption>Foundation local checks</caption>
+<thead>
+<tr>
+<th>Check</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ProjectAtlas MCP initialize and tools/list</td>
+<td>Passed; 0.5.0-rc2, 43 tools</td>
+</tr>
+<tr>
+<td>ProjectAtlas atlas_session_brief and file summary</td>
+<td>Passed for this checkout</td>
+</tr>
+<tr>
+<td>cargo check --workspace --all-targets --locked</td>
+<td>Passed on Linux</td>
+</tr>
+<tr>
+<td>cargo fmt --all --check</td>
+<td>Passed</td>
+</tr>
+<tr>
+<td>cargo clippy --workspace --all-targets --locked -- -D warnings</td>
+<td>Passed on Linux</td>
+</tr>
+<tr>
+<td>cargo build --workspace --locked</td>
+<td>Passed on Linux for the foundation</td>
+</tr>
+<tr>
+<td>cargo nextest run --workspace --locked --no-tests pass</td>
+<td>Passed with zero foundation tests; the initial-view feature adds behavioral tests</td>
+</tr>
+<tr>
+<td>cargo test --workspace --doc --locked</td>
+<td>Passed; zero foundation doctests</td>
+</tr>
+<tr>
+<td>RUSTDOCFLAGS=&quot;-D warnings&quot; cargo doc --workspace --no-deps --locked</td>
+<td>Passed</td>
+</tr>
+<tr>
+<td>cargo audit --file Cargo.lock</td>
+<td>Passed; visible unmaintained ttf-parser warning RUSTSEC-2026-0192, no known vulnerability</td>
+</tr>
+<tr>
+<td>Linux foundation window startup</td>
+<td>Passed under Xvfb with Vulkan llvmpipe (Mesa 26.2.5); intentionally terminated after 15 seconds</td>
+</tr>
+<tr>
+<td>cargo deny --locked check</td>
+<td>Passed advisory, dependency ban, license and source checks; duplicate transitive versions remain warnings</td>
+</tr>
+<tr>
+<td>Actionlint 1.7.12</td>
+<td>Passed all GitHub workflows; action refs pinned to verified commits</td>
+</tr>
+<tr>
+<td>HTML source and generated Pages link checks</td>
+<td>Passed for 22 authored HTML pages, including generated Rust API target checks</td>
+</tr>
+<tr>
+<td>PR policy tests</td>
+<td>Six temporary-Git integration tests passed for commit bounds and ADR status transitions</td>
+</tr>
+<tr>
+<td>Cross-target GitHub CI</td>
+<td>Pending first pull request run; mobile simulator and device coverage is not established by local Linux checks</td>
+</tr>
+</tbody>
+</table>
+<p>See the relevant pull request for immutable CI results and the first-view change for rendering evidence. Store signing, publication and physical device acceptance are separate release work.</p>
+</main>
+</html>

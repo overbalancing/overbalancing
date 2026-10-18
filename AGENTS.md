@@ -11,6 +11,7 @@ AGENTS.md, the short README and GitHub PR templates are harness/discovery except
 Use the installed, version-matched ProjectAtlas skill and MCP tools before broad source reads.
 Start with `atlas_session_brief` and this checkout's explicit `project_path`.
 If MCP is unavailable, use `projectatlas overview`, then bounded folders/files and exact slices.
+If an MCP request stalls, stop the request and use the CLI fallback; do not leave subagents blocked indefinitely.
 Run init only if project-local state is absent or setup verification is explicitly requested.
 Refresh changed files with `atlas_watch_once` / `projectatlas watch --once`.
 Full scans require an absent index or typed recovery guidance. Keep local Atlas state ignored.
@@ -22,6 +23,7 @@ The lead owns planning, spec routing, delegation, integration, review and custom
 Delegate feature implementation to implementers; the lead may make integration fixes.
 The architect owns boundaries and proposed ADRs, evaluates crates and alternatives, and reviews structural changes.
 Implementers deliver a complete feature against its spec and report only urgent blockers or a concise final result to the lead.
+Report stalled tools or required permission immediately to the lead; continue independent work instead of waiting indefinitely.
 The UX engineer owns interaction design, accessibility, layout and UI acceptance review.
 Role instructions: `agents/lead.html`, `agents/architect.html`, `agents/implementer.html`, `agents/ux-engineer.html`.
 Use isolated worktrees for overlapping implementations; bounded disjoint file ownership is allowed for coordinated setup.

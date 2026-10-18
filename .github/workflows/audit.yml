@@ -1,0 +1,21 @@
+name: Dependency audit
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '43 3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: cargo-audit@0.22.2,cargo-deny@0.20.2
+      - run: cargo audit
+      - run: cargo deny --locked check

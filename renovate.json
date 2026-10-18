@@ -1,0 +1,10 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":pinAllExceptPeerDependencies"],
+  "labels": ["dependencies", "chore"],
+  "automerge": false,
+  "packageRules": [
+    {"matchManagers": ["github-actions"], "pinDigests": true},
+    {"matchManagers": ["cargo"], "rangeStrategy": "pin"}
+  ]
+}

@@ -1,0 +1,104 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev libwayland-dev libxkbcommon-dev
+      - run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: cargo-nextest@0.9.148
+      - run: cargo nextest run --locked --workspace --no-tests pass
+      - run: cargo test --locked --workspace --doc
+      - run: python3 scripts/check_docs.py
+      - run: python3 -m unittest discover -s scripts -p test_check_pr.py
+      - if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+        run: python3 scripts/check_pr.py
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev libwayland-dev libxkbcommon-dev
+      - run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo build --locked -p overpalancing-app --bin overpalancing
+      - name: Archive native executable with permissions
+        shell: bash
+        run: |
+          binary=overpalancing
+          if [[ "$RUNNER_OS" == Windows ]]; then binary=overpalancing.exe; fi
+          tar -czf "target/overpalancing-$RUNNER_OS.tar.gz" -C target/debug "$binary"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: desktop-${{ runner.os }}
+          path: target/overpalancing-*.tar.gz
+          if-no-files-found: error
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: rustup target add aarch64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo install cargo-apk --version 0.10.0 --locked
+      - name: Build installable debug APK
+        run: |
+          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+          cargo apk build --locked -p overpalancing-app --lib --target aarch64-linux-android
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: android-debug-apk
+          path: target/debug/apk/*.apk
+          if-no-files-found: error
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo build --locked -p overpalancing-app --bin overpalancing --target aarch64-apple-ios
+      - run: bash scripts/build_ios_simulator.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ios-unsigned-device-executable
+          path: target/aarch64-apple-ios/debug/overpalancing
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ios-simulator-app
+          path: target/ios-simulator/Overpalancing.app.tar.gz
+          if-no-files-found: error
+      - name: Boot, install and launch on iOS simulator
+        timeout-minutes: 8
+        run: python3 scripts/smoke_ios_simulator.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: ios-simulator-launch
+          path: target/ios-simulator/launch.png
