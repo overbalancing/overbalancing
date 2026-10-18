@@ -1,0 +1,10 @@
+/target/
+/.projectatlas/
+/.agents/
+/.codex/
+/.aws/
+
+/site/
+*.apk
+*.aab
+*.ipa
