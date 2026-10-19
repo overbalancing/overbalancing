@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>First view</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+<a href="index.html">Project documentation</a>
+</header>
+<main>
+<h1>First view</h1>
+<p>This selection-only prototype shows four seesaws, weighted color balls and a movable chute. It does not yet implement dropping, matching, compression or physics. No external art is required.</p>
+<pre>
+<code>cargo run -p overpalancing-app</code>
+</pre>
+<p>The window title is <strong>Overpalancing — first view</strong>. The earlier foundation window named <strong>Overpalancing</strong> intentionally contains no scene.</p>
+<p>Use Left/Right, A/D or click/tap a lane to select the chute position. R/B/Y identify colors independently of color vision; numbers identify weights. Split circles illustrate future two- and three-color jokers.</p>
+<h2>Linux render evidence, 2026-10-19</h2>
+<p>Captured using Vulkan llvmpipe under Xvfb. UX reviewed both layouts; these screenshots do not establish physical mobile-device verification.</p>
+<figure>
+<img style="max-width:100%;height:auto" src="evidence/initial-view-landscape.png" alt="Landscape game prototype with four seesaws, color and weight labels, and a gold chute">
+<figcaption>1100 × 800 landscape</figcaption>
+</figure>
+<figure>
+<img style="max-width:100%;height:auto" src="evidence/initial-view-portrait.png" alt="Portrait prototype with enlarged balls and readable color letters and numeric weights">
+<figcaption>540 × 960 portrait</figcaption>
+</figure>
+<figure><img style="max-width:100%;height:auto" src="evidence/initial-view-resized-390.png" alt="Live resized 390 pixel wide game window with the selected chute at the right edge"><figcaption>Live resize to 390 × 844 after keyboard and pointer input</figcaption></figure>
+<p>
+<a href="../specs/changes/initial-view/scenarios.html">Acceptance scenarios and platform evidence</a> · <a href="verification.html">Verification record</a>
+</p>
+</main>
+</body>
+</html>
