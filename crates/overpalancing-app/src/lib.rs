@@ -1,6 +1,8 @@
 //! Interactive fixed-stack placement sandbox shared by desktop and mobile.
 use bevy::{prelude::*, window::PrimaryWindow};
-use overpalancing_core::{Balance, Ball, BallColor, Board, Dispenser, LANE_COUNT, SEESAW_COUNT};
+use overpalancing_core::{
+    Balance, Ball, BallColor, BallColors, Board, Dispenser, LANE_COUNT, SEESAW_COUNT,
+};
 
 const WIDTH: f32 = 920.0;
 const HEIGHT: f32 = 1740.0;
@@ -21,7 +23,7 @@ impl Default for Sandbox {
             dispenser: Dispenser::default(),
             ball: Ball {
                 weight: 1,
-                color: BallColor::Red,
+                colors: BallColors::single(BallColor::Red),
             },
             offset: 0,
         }
@@ -163,6 +165,9 @@ fn name(ball: BallColor) -> &'static str {
         BallColor::Yellow => "Y",
     }
 }
+fn names(colors: BallColors) -> String {
+    colors.iter().map(name).collect::<String>()
+}
 fn redraw(
     mut commands: Commands,
     sandbox: Res<Sandbox>,
@@ -206,14 +211,14 @@ fn redraw(
     label(
         &mut commands,
         format!(
-            "Seesaw {} | {} | {}{}",
+            "Seesaw {} | {}\nColors {} | Weight {}",
             selected / 2 + 1,
             if selected.is_multiple_of(2) {
                 "Left"
             } else {
                 "Right"
             },
-            name(sandbox.ball.color),
+            names(sandbox.ball.colors),
             sandbox.ball.weight
         ),
         0.0,
@@ -243,7 +248,7 @@ fn redraw(
     );
     label(
         &mut commands,
-        "Tap a stack to select",
+        "Select 1-3 colors; last stays on",
         0.0,
         215.0,
         18.0,
@@ -305,15 +310,32 @@ fn redraw(
         );
         for (index, ball) in stack.iter().skip(sandbox.offset).take(3).enumerate() {
             let y = -35.0 + index as f32 * 90.0;
-            commands.spawn((
-                Scene,
-                Mesh2d(meshes.add(Circle::new(radius))),
-                MeshMaterial2d(materials.add(color(ball.color))),
-                Transform::from_xyz(x, y, 2.0),
-            ));
+            let count = ball.colors.count();
+            for (sector, c) in ball.colors.iter().enumerate() {
+                if count == 1 {
+                    commands.spawn((
+                        Scene,
+                        Mesh2d(meshes.add(Circle::new(radius))),
+                        MeshMaterial2d(materials.add(color(c))),
+                        Transform::from_xyz(x, y, 2.0),
+                    ));
+                } else {
+                    commands.spawn((
+                        Scene,
+                        Mesh2d(meshes.add(CircularSector::new(
+                            radius,
+                            std::f32::consts::PI / count as f32,
+                        ))),
+                        MeshMaterial2d(materials.add(color(c))),
+                        Transform::from_xyz(x, y, 2.0).with_rotation(Quat::from_rotation_z(
+                            sector as f32 * std::f32::consts::TAU / count as f32,
+                        )),
+                    ));
+                }
+            }
             label(
                 &mut commands,
-                format!("{}{}", name(ball.color), ball.weight),
+                format!("{}\n{}", names(ball.colors), ball.weight),
                 x,
                 y,
                 20.0,
@@ -361,7 +383,7 @@ fn redraw(
             x,
             -550.0,
             260.0,
-            sandbox.ball.color == c,
+            sandbox.ball.colors.contains(c),
             scale,
         );
     }
@@ -405,7 +427,7 @@ fn input(
         (KeyCode::KeyY, BallColor::Yellow),
     ] {
         if keys.just_pressed(key) {
-            sandbox.ball.color = c;
+            sandbox.ball.colors.toggle(c);
         }
     }
     if keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Enter) {
@@ -452,8 +474,10 @@ fn input(
                 sandbox.ball.weight =
                     ((point.x + 420.0) / 280.0).floor().clamp(0.0, 2.0) as u32 + 1;
             } else if (point.y + 550.0).abs() <= 55.0 {
-                sandbox.ball.color = [BallColor::Red, BallColor::Blue, BallColor::Yellow]
-                    [((point.x + 420.0) / 280.0).floor().clamp(0.0, 2.0) as usize];
+                sandbox.ball.colors.toggle(
+                    [BallColor::Red, BallColor::Blue, BallColor::Yellow]
+                        [((point.x + 420.0) / 280.0).floor().clamp(0.0, 2.0) as usize],
+                );
             } else if (point.y + 680.0).abs() <= 55.0 {
                 if point.x < 0.0 {
                     place(&mut sandbox);
@@ -553,10 +577,23 @@ mod tests {
                 .board
                 .stack(1)
                 .and_then(|s| s.first())
-                .map(|b| b.color),
-            Some(BallColor::Blue)
+                .map(|b| names(b.colors)),
+            Some("RB".into())
         );
-        for _ in 0..5 {
+        key(&mut app, KeyCode::KeyY);
+        key(&mut app, KeyCode::Digit2);
+        key(&mut app, KeyCode::Space);
+        let balls = app
+            .world()
+            .resource::<Sandbox>()
+            .board
+            .stack(1)
+            .unwrap_or(&[]);
+        assert_eq!(names(balls[0].colors), "RB");
+        assert_eq!(balls[0].weight, 3);
+        assert_eq!(names(balls[1].colors), "RBY");
+        assert_eq!(balls[1].weight, 2);
+        for _ in 0..4 {
             key(&mut app, KeyCode::Enter);
         }
         key(&mut app, KeyCode::ArrowUp);
@@ -571,11 +608,13 @@ mod tests {
         );
         key(&mut app, KeyCode::Backspace);
         assert_eq!(app.world().resource::<Sandbox>().board.total(1), 0);
-        assert_eq!(app.world().resource::<Sandbox>().ball.weight, 3);
+        assert_eq!(app.world().resource::<Sandbox>().ball.weight, 2);
     }
     #[test]
     fn actual_portrait_touch_configures_places_once_and_resets() {
         let (mut app, window) = app();
+        tap(&mut app, window, -280.0, -550.0, 10);
+        assert_eq!(names(app.world().resource::<Sandbox>().ball.colors), "R");
         tap(&mut app, window, 350.0, 0.0, 1);
         tap(&mut app, window, 0.0, -420.0, 2);
         tap(&mut app, window, 280.0, -550.0, 3);
@@ -588,7 +627,17 @@ mod tests {
         assert_eq!(sandbox.dispenser.lane(), 7);
         assert_eq!(sandbox.board.total(7), 2);
         assert_eq!(sandbox.board.stack(7).map(<[Ball]>::len), Some(1));
-        assert_eq!(sandbox.ball.color, BallColor::Yellow);
+        assert_eq!(names(sandbox.ball.colors), "RY");
+        tap(&mut app, window, 0.0, -550.0, 11);
+        tap(&mut app, window, -210.0, -680.0, 12);
+        let balls = app
+            .world()
+            .resource::<Sandbox>()
+            .board
+            .stack(7)
+            .unwrap_or(&[]);
+        assert_eq!(names(balls[0].colors), "RY");
+        assert_eq!(names(balls[1].colors), "RBY");
         tap(&mut app, window, 210.0, -680.0, 5);
         assert_eq!(app.world().resource::<Sandbox>().board.total(7), 0);
     }
