@@ -30,7 +30,7 @@ impl Dispenser {
     }
 }
 
-/// Single-color presets available in the placement sandbox.
+/// Colors available in the placement sandbox.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BallColor {
     /// Red, also identified with the letter R in presentation.
@@ -41,13 +41,63 @@ pub enum BallColor {
     Yellow,
 }
 
+/// A nonempty subset of the sandbox palette, with no duplicate colors.
+///
+/// Construction and toggling preserve one to three colors. This describes a
+/// ball's appearance only; matching and joker resolution remain unspecified.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BallColors(u8);
+impl BallColors {
+    const fn bit(color: BallColor) -> u8 {
+        match color {
+            BallColor::Red => 1,
+            BallColor::Blue => 2,
+            BallColor::Yellow => 4,
+        }
+    }
+    /// Create a ball's single initial color.
+    pub const fn single(color: BallColor) -> Self {
+        Self(Self::bit(color))
+    }
+    /// Normalize a nonempty list, or reject an empty list.
+    pub fn new(colors: &[BallColor]) -> Option<Self> {
+        let mask = colors
+            .iter()
+            .fold(0, |mask, color| mask | Self::bit(*color));
+        (mask != 0).then_some(Self(mask))
+    }
+    /// Whether this palette contains the specified color.
+    pub const fn contains(self, color: BallColor) -> bool {
+        self.0 & Self::bit(color) != 0
+    }
+    /// Number of distinct selected colors, always between one and three.
+    pub const fn count(self) -> usize {
+        self.0.count_ones() as usize
+    }
+    /// Iterate selected colors in deterministic red, blue, yellow order.
+    pub fn iter(self) -> impl Iterator<Item = BallColor> {
+        [BallColor::Red, BallColor::Blue, BallColor::Yellow]
+            .into_iter()
+            .filter(move |color| self.contains(*color))
+    }
+    /// Toggle a color; refuse removal of the final color and return `false`.
+    pub fn toggle(&mut self, color: BallColor) -> bool {
+        let next = self.0 ^ Self::bit(color);
+        if next == 0 {
+            return false;
+        }
+        self.0 = next;
+        true
+    }
+}
+
 /// A configured sandbox ball; zero weight is rejected during placement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Ball {
     /// Weight units, independent of the selected color.
     pub weight: u32,
-    /// The sandbox's single selected color.
-    pub color: BallColor,
+    /// One to three distinct selected colors.
+    pub colors: BallColors,
 }
 
 /// Relative weight of the two sides, without any launch implication.
@@ -122,7 +172,66 @@ impl Board {
 mod tests {
     use super::*;
     fn ball(weight: u32, color: BallColor) -> Ball {
-        Ball { weight, color }
+        Ball {
+            weight,
+            colors: BallColors::single(color),
+        }
+    }
+
+    #[test]
+    fn all_nonempty_palettes_have_canonical_order_and_no_duplicates() {
+        let palette = [BallColor::Red, BallColor::Blue, BallColor::Yellow];
+        assert_eq!(BallColors::new(&[]), None);
+        for mask in 1u8..8 {
+            let selected: Vec<_> = palette
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, color)| (mask & (1 << index) != 0).then_some(color))
+                .collect();
+            let mut duplicated = selected.clone();
+            duplicated.reverse();
+            duplicated.extend_from_slice(&selected);
+            let Some(colors) = BallColors::new(&duplicated) else {
+                panic!("nonempty palette");
+            };
+            assert_eq!(colors.count(), selected.len());
+            assert_eq!(colors.iter().collect::<Vec<_>>(), selected);
+            for (index, color) in palette.into_iter().enumerate() {
+                assert_eq!(colors.contains(color), mask & (1 << index) != 0);
+            }
+        }
+    }
+
+    #[test]
+    fn toggling_never_removes_the_last_color() {
+        let mut colors = BallColors::single(BallColor::Red);
+        assert!(!colors.toggle(BallColor::Red));
+        assert_eq!(colors, BallColors::single(BallColor::Red));
+        assert!(colors.toggle(BallColor::Yellow));
+        assert!(colors.toggle(BallColor::Blue));
+        assert_eq!(colors.count(), 3);
+        assert!(colors.toggle(BallColor::Red));
+        assert!(colors.toggle(BallColor::Blue));
+        assert!(!colors.toggle(BallColor::Yellow));
+        assert_eq!(colors, BallColors::single(BallColor::Yellow));
+    }
+
+    #[test]
+    fn multicolor_placement_preserves_palette_and_does_not_multiply_weight() {
+        let Some(colors) = BallColors::new(&[BallColor::Yellow, BallColor::Red, BallColor::Blue])
+        else {
+            panic!("nonempty palette");
+        };
+        let multi = Ball { weight: 3, colors };
+        let mut board = Board::default();
+        assert!(board.place(0, multi));
+        assert!(board.place(0, multi));
+        assert!(board.place(1, ball(6, BallColor::Blue)));
+        assert_eq!(board.total(0), 6);
+        assert_eq!(board.balance(0), Some(Balance::Balanced));
+        assert_eq!(board.stack(0), Some([multi, multi].as_slice()));
+        // Neither matching colors nor three-color appearance resolves any ball.
+        assert_eq!(board.stack(1).map(<[Ball]>::len), Some(1));
     }
 
     #[test]
