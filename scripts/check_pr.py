@@ -8,7 +8,8 @@ import re
 import subprocess
 import sys
 
-STATUSES = {"proposed", "approved", "rejected", "superseded"}
+APPROVAL_STATUSES = {"accepted", "approved"}
+STATUSES = {"proposed", "rejected", "superseded"} | APPROVAL_STATUSES
 
 class StatusParser(HTMLParser):
     def __init__(self):
@@ -39,7 +40,7 @@ def adr_status(content, path):
     values = parser.statuses + re.findall(r"\bStatus\s*:\s*([a-z]+)\b", " ".join(parser.text), re.I)
     values = [value.lower() for value in values]
     if not values or any(value not in STATUSES for value in values) or len(set(values)) != 1:
-        raise ValueError(f"{path}: missing or ambiguous ADR status (expected proposed/approved/rejected/superseded)")
+        raise ValueError(f"{path}: missing or ambiguous ADR status (expected proposed/accepted/approved/rejected/superseded)")
     return values[0]
 
 
@@ -65,9 +66,9 @@ def main():
         before, after = content_at(base, path), content_at(head, path)
         previous = adr_status(before, path) if before is not None else None
         current = adr_status(after, path) if after is not None else None
-        transition |= current == "approved" and previous != "approved"
+        transition |= current in APPROVAL_STATUSES and previous not in APPROVAL_STATUSES
     if transition:
-        print("ADR transitioned to approved: owner must inspect and merge personally; automated merge is prohibited.")
+        print("ADR transitioned to accepted/approved: owner must inspect and merge personally; automated merge is prohibited.")
         if os.environ.get("PR_AUTHOR_TYPE") == "Bot":
             sys.exit("Bot-authored PR includes an ADR approval transition. Owner must take over this change.")
     print(f"PR scope accepted: {count} commits")

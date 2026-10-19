@@ -36,7 +36,7 @@ The customer chooses technologies. Rust and Bevy are selected; new direct depend
 Before proposing a crate, the architect checks license, bus-factor evidence, recent releases/commits,
 reputation/security signals and alternatives, with dated primary source links. Never invent a bus factor.
 ADRs live in root `adr/`. Proposed decisions remain `proposed` until the customer merges their approval PR.
-Only the customer may merge a PR that transitions any ADR to `approved`.
+Only the customer may merge a PR that transitions any ADR to `accepted` (canonical) or `approved` (legacy synonym).
 Agents may merge docs, CI and chore PRs after required checks pass, provided they do not approve an ADR.
 Feature/story PRs require customer acceptance; a chore label does not authorize merging feature changes.
 

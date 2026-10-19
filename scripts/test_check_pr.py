@@ -52,6 +52,23 @@ class PullRequestChecks(unittest.TestCase):
         self.commit("<p>Status: approved</p><p>Clarification</p>")
         self.assertEqual(self.check(base).returncode, 0)
 
+    def test_bot_accepted_transition_blocked(self):
+        base = self.commit("<p>Status: proposed</p>")
+        self.commit('<meta name="adr-status" content="accepted"><p>Status: accepted</p>')
+        self.assertNotEqual(self.check(base).returncode, 0)
+
+    def test_human_accepted_transition_warns(self):
+        base = self.commit("<p>Status: proposed</p>")
+        self.commit("<p>Status: accepted</p>")
+        result = self.check(base, "User")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("owner must inspect and merge personally", result.stdout)
+
+    def test_existing_accepted_edit_allowed(self):
+        base = self.commit("<p>Status: accepted</p>")
+        self.commit("<p>Status: accepted</p><p>Clarification</p>")
+        self.assertEqual(self.check(base).returncode, 0)
+
     def test_seven_commits_rejected(self):
         base = self.commit("<p>Status: proposed</p>")
         for index in range(7):
