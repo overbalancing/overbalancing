@@ -22,11 +22,11 @@ cargo run --locked -p overpalancing-app --bin overpalancing</code>
 </pre>
 <p>Run Cargo commands from the repository root in a graphical Linux session with Vulkan support. The pinned development toolchain is stable Rust 1.99.0; the minimum supported Rust version (MSRV) is stable 1.97.1. CI checks that MSRV on a nightly schedule.</p>
 <h2>First-view controls</h2>
-<p>Controls are to be documented when the first-view interaction is implemented and reviewed. Keyboard, pointer and touch behavior must match the feature's <a href="../specs/changes/initial-view/scenarios.html">acceptance scenarios</a>; no unverified control mapping is promised here.</p>
+<p>Use Left/Right arrows or A/D to select the chute lane; click or tap a lane to select it directly. The chute moves to indicate selection. This view does not drop balls or resolve gameplay. Input and device verification remain tracked in the <a href="../specs/changes/initial-view/scenarios.html">acceptance scenarios</a>.</p>
 <h2>Responsibilities</h2>
 <p>The lead coordinates work and questions. The architect investigates crates, evaluates alternatives, maintenance activity, reputation and bus factor, and records recommendations. Marc-Hendric Lühr confirms technology choices. Implementers deliver bounded features; the UX engineer owns interaction, readability and accessibility. Implementers escalate only urgent blockers or decisions that require the lead.</p>
 <h2>Changes and decisions</h2>
-<p>Specs, ADRs and project documentation are authored in HTML. ADRs live in the repository-root <code>adr/</code> directory. Only the owner may merge a change that transitions an ADR to approved. The lead may merge documentation, CI and chore pull requests within the owner's authorization; feature and story merges require owner review.</p>
+<p>Specs, ADRs and project documentation are authored in HTML. ADRs live in the repository-root <code>adr/</code> directory. Only the owner may merge a change that transitions an ADR to accepted or approved. The lead may merge documentation, CI and chore pull requests within the owner's authorization; feature and story merges require owner review.</p>
 <p>Each feature or story pull request delivers a complete feature. Clean the branch before opening the pull request so it contains one to six coherent commits. Keep unrelated changes out of the branch and preserve already published history unless a coordinated rewrite is authorized.</p>
 <h2>Specification lifecycle</h2>
 <ol>
