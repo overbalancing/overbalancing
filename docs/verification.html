@@ -11,7 +11,7 @@
 </header>
 <main>
 <h1>Verification evidence</h1>
-<p>Updated 2026-10-18. Evidence is recorded per change; compilation is not evidence of a device launch.</p>
+<p>Updated 2026-10-19. Evidence is recorded per change; compilation is not evidence of a device launch.</p>
 <table>
 <caption>Foundation local checks</caption>
 <thead>
@@ -79,14 +79,15 @@
 </tr>
 <tr>
 <td>PR policy tests</td>
-<td>Six temporary-Git integration tests passed for commit bounds and ADR status transitions</td>
+<td>Nine temporary-Git integration tests passed (including canonical accepted and legacy approved states) for commit bounds and ADR status transitions</td>
 </tr>
 <tr>
 <td>Cross-target GitHub CI</td>
-<td>Pending first pull request run; mobile simulator and device coverage is not established by local Linux checks</td>
+<td>Foundation Linux, Windows and macOS builds plus iOS device/simulator builds and simulator launch passed. Corrected Android build and first-view platform CI remain pending; these are separate from physical device acceptance.</td>
 </tr>
 </tbody>
 </table>
+<h2>Initial-view visual review</h2><p>On 2026-10-19, the UX engineer inspected Linux render screenshots at 1100 × 800 and 540 × 960. Both show four seesaws with pivots, a labeled chute, colored balls and readable numeric weights. The portrait revision uses larger balls and two-line color/weight labels. Static layout review passed at these two sizes. A separate native-window test confirmed visible keyboard and pointer selection; a live resize to 390 × 844 was also captured and checked. Seven Rust tests cover input routing, bounds and resize behavior, including real Bevy touch-event processing. Physical mobile device execution remains pending. Customer feature acceptance and remaining platform runtime checks are pending.</p>
 <p>See the relevant pull request for immutable CI results and the first-view change for rendering evidence. Store signing, publication and physical device acceptance are separate release work.</p>
 </main>
 </html>
