@@ -69,8 +69,14 @@ jobs:
       - run: cargo install cargo-apk --version 0.10.0 --locked
       - name: Build installable debug APK
         run: |
-          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
-          cargo apk build --locked -p overpalancing-app --lib --target aarch64-linux-android
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}"
+          if [[ -z "$ANDROID_NDK_ROOT" ]]; then
+            ANDROID_NDK_ROOT=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -n 1)
+            export ANDROID_NDK_ROOT
+          fi
+          cargo fetch --locked
+          CARGO_NET_OFFLINE=true cargo apk build -p overpalancing-app --lib --target aarch64-linux-android
+          git diff --exit-code -- Cargo.lock
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: android-debug-apk
