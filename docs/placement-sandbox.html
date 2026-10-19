@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+<title>Placement sandbox · Overpalancing</title>
+</head>
+<body>
+<header><nav aria-label="Documentation"><a href="index.html">Overpalancing documentation</a> · <a href="../specs/changes/fixed-stack-placement/proposal.html">Feature proposal</a></nav></header>
+<main>
+<h1>Placement sandbox</h1>
+<p>Configure a ball and place it onto either side of four seesaws. This sandbox demonstrates fixed stacks, accumulated weights and illustrative tilt. Balls remain in their ordered stacks; they do not roll or launch. Matching, compression, scoring and final dispenser sequencing are outside this feature.</p>
+<h2>Configure and place</h2>
+<ol>
+<li>Select one of eight stack positions: left or right on each seesaw.</li>
+<li>Choose weight 1, 2 or 3 and one color: red, blue or yellow. These are sandbox presets, not final limits for the game.</li>
+<li>Check the selected target, weight and color, then activate Place. One ball is added to that stack. Changing the configuration leaves existing balls unchanged.</li>
+</ol>
+<table>
+<caption>Sandbox controls</caption>
+<thead><tr><th scope="col">Action</th><th scope="col">Keyboard</th><th scope="col">Mouse or touch</th></tr></thead>
+<tbody>
+<tr><th scope="row">Select stack</th><td>Left/Right arrows or A/D</td><td>Click or tap the desired stack position</td></tr>
+<tr><th scope="row">Choose weight</th><td>1, 2 or 3</td><td>Activate the corresponding weight button</td></tr>
+<tr><th scope="row">Choose color</th><td>R, B or Y</td><td>Activate Red, Blue or Yellow</td></tr>
+<tr><th scope="row">Place one ball</th><td>Space or Enter</td><td>Activate Place</td></tr>
+<tr><th scope="row">Inspect retained stack rows</th><td>Up/Down arrows</td><td>Activate Lower or Higher</td></tr>
+<tr><th scope="row">Clear all stacks</th><td>Backspace</td><td>Activate Reset</td></tr>
+</tbody>
+</table>
+<p>Selecting a stack does not place a ball. Use the explicit Place action. Reset clears all eight stacks.</p>
+<h2>Read the board</h2>
+<p>Each side displays its total accumulated weight, including balls outside the visible stack window. The heavier side tilts downward; equal totals balance. Color names or letters accompany ball colors and weights remain numeric.</p>
+<p>Tall stacks have no invented loss condition or arbitrary capacity limit. Lower and Higher change which retained rows are visible; inspection does not remove balls. The same row offset is shared by all stacks. The range indicator describes the selected stack; it can show Empty while another stack still has balls in those rows.</p>
+<h2>Rendered evidence</h2><figure><img src="evidence/placement-landscape.png" alt="Placement sandbox with weighted colored stacks on all four seesaws"><figcaption>Actual Linux landscape render after keyboard placement.</figcaption></figure><figure><img src="evidence/placement-390.png" alt="390-pixel portrait view inspecting rows six through eight of a tall stack"><figcaption>Actual resize to 390×844; rows 6–8 remain inspectable while the total includes the full stack.</figcaption></figure>
+<h2>Verification status</h2>
+<p>On 2026-10-19, the UX engineer inspected filled Linux render screenshots in landscape and at 390-pixel portrait width, plus a pointer-placement screenshot after reset. All four seesaws, weight/color labels, selected side totals and controls are readable; the tall-stack view shows retained rows 6–8 with the full accumulated total. The lead verified the regenerated final portrait render: shortened balance labels are separated and readable. The lead separately reports successful X11 keyboard placement across all eight positions, tall-stack inspection, live resizing, reset and pointer configuration/placement checks. Touch has headless input-system coverage, not physical-device proof. Linux rendering does not establish Android or iOS device execution; cross-platform runtime checks and customer feature acceptance remain pending.</p>
+<p>See <a href="../specs/changes/fixed-stack-placement/scenarios.html">acceptance scenarios</a>, <a href="verification.html">verification evidence</a> and <a href="questions.html">open decisions</a>. Question 0007 blocks launch behavior; this sandbox does not choose that rule.</p>
+</main>
+</body>
+</html>

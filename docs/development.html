@@ -16,7 +16,7 @@
 <p>Install Rust with rustup and these Debian/Ubuntu system packages. The current rendering-only feature set does not require ALSA development libraries.</p>
 <pre>
 <code>sudo apt-get update
-sudo apt-get install build-essential pkg-config libudev-dev libx11-dev libxi-dev libxkbcommon-dev libwayland-dev libvulkan1 mesa-vulkan-drivers
+sudo apt-get install build-essential pkg-config libudev-dev libx11-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libvulkan1 mesa-vulkan-drivers
 rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
 cargo run --locked -p overpalancing-app --bin overpalancing</code>
 </pre>
@@ -28,6 +28,7 @@ cargo run --locked -p overpalancing-app --bin overpalancing</code>
 <h2>Changes and decisions</h2>
 <p>Specs, ADRs and project documentation are authored in HTML. ADRs live in the repository-root <code>adr/</code> directory. Only the owner may merge a change that transitions an ADR to accepted or approved. The lead may merge documentation, CI and chore pull requests within the owner's authorization; feature and story merges require owner review.</p>
 <p>Each feature or story pull request delivers a complete feature. Clean the branch before opening the pull request so it contains one to six coherent commits. Keep unrelated changes out of the branch and preserve already published history unless a coordinated rewrite is authorized.</p>
+<p>Prepare at most four pending PRs per customer review batch. Every PR targets <code>main</code>; dependent branches build on the previous branch and explicitly list review order. The owner reviews the batch before further feature work proceeds.</p>
 <h2>Specification lifecycle</h2>
 <ol>
 <li>Locate a matching capability in <a href="../specs/index.html">the specification index</a>. Assign each incoming idea to an existing capability or propose a new one; preserve unresolved questions explicitly.</li>

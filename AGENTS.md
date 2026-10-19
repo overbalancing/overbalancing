@@ -47,6 +47,7 @@ Use an OpenSpec-inspired HTML workflow in `specs/`: canonical capability specs, 
 proposal/design/tasks, then archive delivered changes. Route new customer ideas to existing specs or create a new one.
 Preserve unresolved rules explicitly; do not silently invent game mechanics.
 One feature/story PR contains the entire usable feature. Avoid intermediate plumbing PRs.
+Prepare at most four pending PRs for a customer review batch. Target `main` for every PR; dependent branches build on the preceding branch and state their dependency and review order.
 Clean the branch before PR creation: 1–6 focused Conventional Commits, no fixup/WIP commits or unrelated edits.
 Never rewrite shared history without coordination. PRs describe visible behavior, review guide, dependencies,
 validation and remaining platform proof. Do not claim device runs from cross-compilation.
