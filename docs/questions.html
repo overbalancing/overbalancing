@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Customer questions and answers · Overpalancing</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><a href="index.html">Overpalancing documentation</a></header>
+<main>
+<h1>Customer questions and answers</h1>
+<p>Updated 2026-10-19. Questions are asked in the customer conversation and recorded here with stable identifiers. Reply using the identifier; the lead maintains this log. Answers do not replace ADR approval or feature acceptance.</p>
+<h2 id="0003-RENOVATE-AUTH">0003-RENOVATE-AUTH — answered</h2>
+<p>Should Renovate use the self-hosted workflow from the reference project, or the Renovate GitHub App?</p>
+<p>Owner answer, 2026-10-19: use self-hosted Renovate as in the homeautomation project, with <code>renovatebot/github-action@v46.3.6</code>. The workflow already pins that release to its commit SHA.</p>
+<p>The current implementation uses a self-hosted workflow and needs a suitable repository secret named <code>RENOVATE_TOKEN</code>. No repository secrets were configured at verification. Never send tokens in the conversation or record them in this public log.</p>
+<h2 id="0004-REPOSITORY-VISIBILITY">0004-REPOSITORY-VISIBILITY — answered</h2>
+<p>Question: should the repository become public so GitHub Pages is available with the current plan?</p>
+<p>Owner answer, 2026-10-19: the repository has been made public. Public visibility and workflow-based Pages configuration were verified. The first documentation deployment requires merging the foundation workflow into <code>main</code>.</p>
+<h2 id="0001-LICENSE-NAME">0001-LICENSE-NAME — answered</h2>
+<p>Owner answer: Marc-Hendric Lühr is the name for the license and exclusive commercial rights. This identifier was assigned retrospectively to the earlier license-name question.</p>
+<h2 id="0002-MSRV-SCHEDULE">0002-MSRV-SCHEDULE — answered</h2>
+<p>Owner answer: check MSRV in a scheduled overnight build, not on every pull request. Use the stable MSRV compiler; “nightly” describes the schedule. This identifier was assigned retrospectively to the earlier scheduling clarification.</p>
+<h2 id="0005-SEESAW-BEHAVIOR">0005-SEESAW-BEHAVIOR — answered</h2>
+<p>Owner answer, 2026-10-19: fixed stacks. Balls do not roll; weight-triggered launches, edge wrapping and opponent-first split-screen routing are recorded in the <a href="../specs/current/game-concept.html">game concept</a>.</p>
+<h2 id="0006-FLIGHT-RULE">0006-FLIGHT-RULE — open</h2>
+<p>For arbitrary stacks and arriving weights, what determines which balls launch and how far: the arriving ball or side totals, and the top opposing ball or multiple balls? What exactly is one field? How does a landing trigger the next launch?</p>
+<p>The owner examples are canonical; a general formula has not yet been agreed.</p>
+</main>
+</body>
+</html>

@@ -29,6 +29,7 @@ Role instructions: `agents/lead.html`, `agents/architect.html`, `agents/implemen
 Use isolated worktrees for overlapping implementations; bounded disjoint file ownership is allowed for coordinated setup.
 Do not ask the customer to coordinate subagents. Batch material questions through the lead.
 Every customer question must carry a unique identifier, for example `0003-CRATE-SELECTION`.
+Track questions, answers and status in `docs/questions.html`.
 
 # Decisions and dependencies
 

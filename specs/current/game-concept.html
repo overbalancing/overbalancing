@@ -17,13 +17,18 @@
 <ul>
 <li>The board contains four scales or seesaws.</li>
 <li>Balls have different weights and colors.</li>
+<li>Balls occupy fixed stacks on either side of a seesaw; they do not roll. Balls may move between fields by being launched.</li>
+<li>Owner examples, starting with one weight-1 ball on the left: placing weight 1 on the right balances the seesaw; adding another weight-1 ball on the right lowers that side without a launch. Placing weight 2 instead launches the left weight-1 ball one field to the right; weight 3 launches it two fields to the right.</li>
+<li>Flights and landings enable chain reactions. The general launch and reaction-resolution rules remain to be specified.</li>
+<li>A ball flying beyond the right edge re-enters from the left, and vice versa. In split-screen play it enters the other player's board first.</li>
 <li>Five vertically stacked balls of the same color compress into one ball.</li>
 <li>A horizontal row of three or more balls of the same color clears together with balls of that same color connected horizontally and vertically.</li>
 <li>A ball may have up to three colors and acts as a joker.</li>
 </ul>
 <h2>Unresolved before gameplay implementation</h2>
 <ul>
-<li>Mass after compression, mass distribution and physical response.</li>
+<li>Mass after compression and mass distribution.</li>
+<li>General launch calculation: arriving ball versus stack totals, selection of launched balls, distance for other weights, meaning of one field, and landing/reaction ordering. Do not infer a general formula from the examples.</li>
 <li>Whether multicolor matching uses shared colors, a chosen color, or another rule.</li>
 <li>Resolution ordering for simultaneous compression, matches and intersecting color groups.</li>
 <li>Board capacity, placement constraints, scoring, failure conditions and dispenser sequencing.</li>
