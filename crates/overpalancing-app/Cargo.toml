@@ -1,0 +1,37 @@
+[package]
+name = "overpalancing-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license-file.workspace = true
+repository.workspace = true
+default-run = "overpalancing"
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "overpalancing"
+path = "src/main.rs"
+
+[dependencies]
+overpalancing-core.workspace = true
+bevy.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bevy = { workspace = true, features = ["x11", "wayland"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+bevy = { workspace = true, features = ["android-native-activity"] }
+
+[package.metadata.android]
+package = "dev.overpalancing.game"
+apk_name = "overpalancing"
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 35
+
+[lints]
+workspace = true

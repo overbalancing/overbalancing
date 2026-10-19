@@ -1,0 +1,30 @@
+[workspace]
+members = ["crates/overpalancing-core", "crates/overpalancing-app"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+publish = false
+license-file = "LICENSE.html"
+repository = "https://github.com/overbalancing/overbalancing"
+
+[workspace.dependencies]
+overpalancing-core = { version = "=0.1.0", path = "crates/overpalancing-core" }
+bevy = { version = "=0.20.0", default-features = false, features = ["std", "default_app", "2d_bevy_render", "bevy_winit", "default_font", "multi_threaded"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+
+[profile.dev]
+debug = 1
+
+[profile.dev.package."*"]
+opt-level = 2

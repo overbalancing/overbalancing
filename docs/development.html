@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Development and review · Overpalancing</title>
+<link rel="stylesheet" href="../docs/style.css">
+</head>
+<body>
+<header>
+<a href="../docs/index.html">Overpalancing documentation</a>
+</header>
+<main>
+<h1>Development and review</h1>
+<h2>Linux setup and launch</h2>
+<p>Install Rust with rustup and these Debian/Ubuntu system packages. The current rendering-only feature set does not require ALSA development libraries.</p>
+<pre>
+<code>sudo apt-get update
+sudo apt-get install build-essential pkg-config libudev-dev libx11-dev libxi-dev libxkbcommon-dev libwayland-dev libvulkan1 mesa-vulkan-drivers
+rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+cargo run --locked -p overpalancing-app --bin overpalancing</code>
+</pre>
+<p>Run Cargo commands from the repository root in a graphical Linux session with Vulkan support. The pinned development toolchain is stable Rust 1.99.0; the minimum supported Rust version (MSRV) is stable 1.97.1. CI checks that MSRV on a nightly schedule.</p>
+<h2>First-view controls</h2>
+<p>Controls are to be documented when the first-view interaction is implemented and reviewed. Keyboard, pointer and touch behavior must match the feature's <a href="../specs/changes/initial-view/scenarios.html">acceptance scenarios</a>; no unverified control mapping is promised here.</p>
+<h2>Responsibilities</h2>
+<p>The lead coordinates work and questions. The architect investigates crates, evaluates alternatives, maintenance activity, reputation and bus factor, and records recommendations. Marc-Hendric Lühr confirms technology choices. Implementers deliver bounded features; the UX engineer owns interaction, readability and accessibility. Implementers escalate only urgent blockers or decisions that require the lead.</p>
+<h2>Changes and decisions</h2>
+<p>Specs, ADRs and project documentation are authored in HTML. ADRs live in the repository-root <code>adr/</code> directory. Only the owner may merge a change that transitions an ADR to approved. The lead may merge documentation, CI and chore pull requests within the owner's authorization; feature and story merges require owner review.</p>
+<p>Each feature or story pull request delivers a complete feature. Clean the branch before opening the pull request so it contains one to six coherent commits. Keep unrelated changes out of the branch and preserve already published history unless a coordinated rewrite is authorized.</p>
+<h2>Specification lifecycle</h2>
+<ol>
+<li>Locate a matching capability in <a href="../specs/index.html">the specification index</a>. Assign each incoming idea to an existing capability or propose a new one; preserve unresolved questions explicitly.</li>
+<li>Create <code>specs/changes/&lt;change-id&gt;/</code> with HTML proposal, design, tasks and scenarios. Link affected current capabilities and ADRs. This workflow borrows OpenSpec concepts; it does not claim OpenSpec CLI compatibility.</li>
+<li>Record observable acceptance criteria and actual validation evidence. Leave unverified tasks pending. Decisions needing the owner receive a stable question identifier.</li>
+<li>After implementation and acceptance, integrate the accepted behavior into <code>specs/current/</code>, record the merge and verification evidence, and move the change to <code>specs/archive/</code>. Preserve links or update every incoming reference.</li>
+</ol>
+<h2>Validation</h2>
+<p>Run formatting, Clippy, nextest and documentation checks for the affected code. CI also covers security audit, dependency policy, scheduled MSRV checks and supported target builds. Use stable Rust for ordinary development; the MSRV job runs on a nightly schedule, not on the nightly compiler. Build success and runtime verification are recorded separately.</p>
+<p>See <a href="verification.html">verification evidence</a> for recorded checks and remaining runtime validation.</p>
+<h2>Assets</h2>
+<p>The primitive first view needs no external assets. If assets become necessary, request the exact component, intended use, pixel dimensions, format, transparency and variants before integrating them.</p>
+<h2>ProjectAtlas</h2>
+<p>Follow the installed version-matched ProjectAtlas skill and repository instructions. Begin with the explicit checkout's MCP session brief. Use incremental refresh after changes; keep local Atlas state ignored.</p>
+<h2>Structural and workflow references</h2>
+<p>Recorded 2026-10-18 from the owner-provided examples: <a href="https://github.com/curvyo/curvyo/">curvyo/curvyo</a> informs project structure and agent collaboration; <a href="https://github.com/Th3Link/homeautomation">Th3Link/homeautomation</a> informs CI and maintenance workflows. These are design references; this attribution does not claim their code was copied. This project keeps ADRs at its root and authors project documentation in HTML.</p>
+<h2>CI operations</h2>
+<p>Self-hosted Renovate follows the workflow reference. Configure a least-privilege <code>RENOVATE_TOKEN</code> repository secret before its scheduled run; do not reuse broad personal credentials. The token needs access to this repository and permission to create dependency branches and pull requests. No secret belongs in source or chat. Dependency PRs are reviewed before merge.</p>
+<p>Pages publishes the preserved <code>docs/</code>, <code>adr/</code> and <code>specs/</code> trees plus Rustdoc under <code>api/</code>. Configure GitHub Pages to use GitHub Actions. PR builds validate links; deployment runs only from main. CI artifacts provide desktop archives, an Android debug APK, and an ad-hoc signed iOS simulator app archive. Simulator signing is not App Store distribution signing.</p>
+<p>
+<code>CODEOWNERS</code> and the PR check assist review. They cannot identify whether an API call using the owner's account was made by the owner or an agent; the lead must never merge ADR approval transitions. Configure branch rules with care: GitHub does not allow an author to approve their own PR.</p>
+</main>
+<footer>Overpalancing · Source-available game</footer>
+</body>
+</html>

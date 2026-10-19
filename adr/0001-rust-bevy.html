@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<link rel="stylesheet" href="../docs/style.css">
+<title>ADR 0001: Rust and Bevy</title>
+<body>
+<header>
+<nav aria-label="Project documentation">
+<a href="../docs/index.html">Overpalancing documentation</a> · <a href="../adr/index.html">Decisions</a> · <a href="../specs/index.html">Specifications</a>
+</nav>
+</header>
+<main>
+<h1>ADR 0001: Rust and Bevy</h1>
+<p>Status: accepted. Created: 2026-10-18. Accepted by Marc-Hendric Lühr on 2026-10-19. The owner must merge this acceptance change.</p>
+<h2>Context</h2>
+<p>Overpalancing is a commercial game, initially developed on Linux with Windows, macOS, iOS and Android build coverage. The owner has selected Rust and Bevy; this proposal records the implementation consequences without claiming ADR approval.</p>
+<h2>Decision</h2>
+<p>Use Bevy 0.20.0 and Rust 1.99.0 stable, with an initial MSRV of 1.97.1 matching Bevy. Nightly means a scheduled nightly MSRV workflow, not the nightly Rust compiler. Pin the toolchain and dependency lockfile. Separate a dependency-free deterministic domain crate from the Bevy application crate. Share application startup across desktop and mobile; build the mobile library as a cdylib with Bevy's bevy_main entrypoint.</p>
+<p>Select explicit 2D rendering, windowing and font features. Linux enables X11 and Wayland; Android uses native-activity. Use Bevy primitives for the initial view, with no external art or physics dependency. Prototype rendering must not implement undocumented game rules.</p>
+<h2>Alternatives</h2>
+<p>Godot provides mature visual tooling and mobile export but would change the owner's engine choice. Macroquad offers a smaller 2D API but less integrated ECS and tooling. A custom wgpu engine would transfer rendering and platform integration costs to this project. No alternative is added as a dependency.</p>
+<h2>Consequences and risks</h2>
+<p>Bevy's pre-1.0 releases can introduce breaking APIs. Cross-compilation is build evidence; simulator, device and store-signing validation remain separate. Mobile packaging requires platform SDKs and signing credentials before distribution. Keep dependency health under recurring review; additional crates need owner confirmation after an architect assessment.</p>
+<p>Current audit reports no known vulnerability but reports an unmaintained transitive ttf-parser 0.25.1 advisory, <a href="https://rustsec.org/advisories/RUSTSEC-2026-0192">RUSTSEC-2026-0192</a>. Do not suppress this silently; track upstream resolution and recheck the locked graph.</p>
+<h2>Sources checked 2026-10-18</h2>
+<ul>
+<li>
+<a href="https://github.com/bevyengine/bevy/releases/tag/v0.20.0">Bevy 0.20.0 release</a>
+</li>
+<li>
+<a href="https://github.com/bevyengine/bevy/blob/v0.20.0/Cargo.toml">Versioned feature and MSRV manifest</a>
+</li>
+<li>
+<a href="https://github.com/bevyengine/bevy/tree/v0.20.0/examples/mobile">Official mobile example</a>
+</li>
+</ul>
+</main>
+</body>
+</html>

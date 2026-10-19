@@ -1,0 +1,13 @@
+/target/
+/.projectatlas/
+/.agents/
+/.codex/
+/.aws/
+
+/site/
+*.apk
+*.aab
+*.ipa
+
+__pycache__/
+*.pyc
