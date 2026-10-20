@@ -46,9 +46,48 @@ pub struct Outcome {
     /// Overflow after all local resolution and launch removals.
     pub game_over: bool,
 }
-fn compress(board: &mut Board) -> Result<usize, ResolutionError> {
+/// Marked balls remain visible and scoreless until an explicit clear commit.
+/// Membership survives platform movement and is remapped through compression;
+/// launched balls leave the pending board group and remain owned by their flight.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PendingClear {
+    cells: Vec<matching::Cell>,
+}
+impl PendingClear {
+    /// Current bottom-to-top identities; read again after every prepare or commit.
+    pub fn cells(&self) -> &[matching::Cell] {
+        &self.cells
+    }
+    /// Whether there is no pending clear animation.
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+    fn compressed(&mut self, lane: usize, start: usize) {
+        for cell in &mut self.cells {
+            if cell.lane == lane && cell.index >= start {
+                cell.index = if cell.index < start + 5 {
+                    start
+                } else {
+                    cell.index - 4
+                };
+            }
+        }
+        self.cells.sort_unstable();
+        self.cells.dedup();
+    }
+}
+fn empty_outcome() -> Outcome {
+    Outcome {
+        points: 0,
+        cleared_count: 0,
+        compressed_count: 0,
+        flights: Vec::new(),
+        game_over: false,
+    }
+}
+fn compress(board: &mut Board, pending: &mut PendingClear) -> Result<usize, ResolutionError> {
     let mut count = 0;
-    for stack in &mut board.stacks {
+    for (lane, stack) in board.stacks.iter_mut().enumerate() {
         let mut index = 0;
         while index + 5 <= stack.len() {
             let common: Vec<_> = stack[index]
@@ -69,6 +108,7 @@ fn compress(board: &mut Board) -> Result<usize, ResolutionError> {
                 .try_fold(0u32, |sum, ball| sum.checked_add(ball.weight))
                 .ok_or(ResolutionError::WeightOverflow)?;
             stack.splice(index..index + 5, [Ball { weight, colors }]);
+            pending.compressed(lane, index);
             count += 1;
             index = 0;
         }
@@ -82,6 +122,7 @@ fn launch_reversals(
     board: &mut Board,
     before: [Option<Balance>; SEESAW_COUNT],
     flights: &mut Vec<ResolvedFlight>,
+    pending: &mut PendingClear,
 ) {
     for (seesaw, old) in before.into_iter().enumerate() {
         let rightward = match (old, board.balance(seesaw)) {
@@ -99,6 +140,9 @@ fn launch_reversals(
         let Some(ball) = board.stacks[origin].pop() else {
             continue;
         };
+        pending
+            .cells
+            .retain(|cell| !(cell.lane == origin && cell.index == origin_index));
         let steps = (distance % LANE_COUNT as u64) as usize;
         let destination = if rightward {
             (origin + steps) % LANE_COUNT
@@ -115,15 +159,28 @@ fn launch_reversals(
         });
     }
 }
-/// Atomically land a ball and resolve compression, cascades and weight reversals.
-///
-/// Geometry is frozen during each compression/clear phase. After weight changes,
-/// all seesaws react and the new geometry is checked for additional matches.
-/// Launch removal alone cannot trigger a second launch. Internal loops terminate
-/// because every productive phase reduces ball count; no arbitrary game cap is used.
-pub fn land(
+fn prepare_phase(
     board: &mut Board,
-    progression: &mut Progression,
+    pending: &mut PendingClear,
+    before: [Option<Balance>; SEESAW_COUNT],
+) -> Result<Outcome, ResolutionError> {
+    let mut outcome = empty_outcome();
+    outcome.compressed_count = compress(board, pending)?;
+    launch_reversals(board, before, &mut outcome.flights, pending);
+    let geometry = matching::capacities(board);
+    let mut seeds = pending.cells.clone();
+    seeds.extend(matching::cascade_at(board, &geometry));
+    pending.cells = matching::expand_at(board, &geometry, &seeds);
+    outcome.game_over = pending.is_empty() && board.is_game_over();
+    Ok(outcome)
+}
+/// Prepare a real landing while keeping marked clearing balls present and scoreless.
+/// New arrivals may expand an already marked group without requiring a new horizontal
+/// seed. Compression remaps identities and launch removal removes only its exact mark.
+/// The caller controls a fixed animation deadline; this core owns no clock.
+pub fn prepare_landing(
+    board: &mut Board,
+    pending: &mut PendingClear,
     lane: usize,
     ball: Ball,
 ) -> Result<Outcome, ResolutionError> {
@@ -134,50 +191,71 @@ pub fn land(
         return Err(ResolutionError::ZeroWeight);
     }
     let mut candidate = board.clone();
-    let mut next_progression = progression.clone();
-    let mut geometry = matching::capacities(&candidate);
-    let mut before = balances(&candidate);
+    let mut next_pending = pending.clone();
+    let before = balances(&candidate);
     candidate.stacks[lane].push(ball);
-    let mut outcome = Outcome {
-        points: 0,
-        cleared_count: 0,
-        compressed_count: 0,
-        flights: Vec::new(),
-        game_over: false,
-    };
-    loop {
-        loop {
-            let compressed = compress(&mut candidate)?;
-            outcome.compressed_count += compressed;
-            let cells = matching::cascade_at(&candidate, &geometry);
-            if cells.is_empty() {
-                break;
-            }
-            let points =
-                scoring::score_cells(&candidate, &cells).map_err(ResolutionError::Score)?;
-            outcome.points = outcome
-                .points
-                .checked_add(points)
-                .ok_or(ResolutionError::Score(ScoreError::Overflow))?;
-            outcome.cleared_count += cells.len();
-            // Descending cell identity keeps earlier indices stable as vectors collapse.
-            for cell in cells.into_iter().rev() {
-                candidate.stacks[cell.lane].remove(cell.index);
-            }
-        }
-        launch_reversals(&mut candidate, before, &mut outcome.flights);
-        // Launch removal itself is not a new arrival or another launch trigger.
-        before = balances(&candidate);
-        let next_geometry = matching::capacities(&candidate);
-        if next_geometry == geometry {
-            break;
-        }
-        geometry = next_geometry;
+    let outcome = prepare_phase(&mut candidate, &mut next_pending, before)?;
+    *board = candidate;
+    *pending = next_pending;
+    Ok(outcome)
+}
+/// Commit marked removals and points atomically, then prepare the next clear phase.
+/// Sticky membership uses identities maintained only by this API; callers must not
+/// mutate board stacks between preparation and commit except via prepare_landing.
+pub fn commit_clear(
+    board: &mut Board,
+    progression: &mut Progression,
+    pending: &mut PendingClear,
+) -> Result<Outcome, ResolutionError> {
+    if pending.is_empty() {
+        let mut outcome = empty_outcome();
+        outcome.game_over = board.is_game_over();
+        return Ok(outcome);
     }
+    let mut candidate = board.clone();
+    let mut next_progression = progression.clone();
+    let mut next_pending = pending.clone();
+    let before = balances(&candidate);
+    let points =
+        scoring::score_cells(&candidate, &next_pending.cells).map_err(ResolutionError::Score)?;
     next_progression
-        .award(outcome.points)
+        .award(points)
         .map_err(ResolutionError::Score)?;
-    outcome.game_over = candidate.is_game_over();
+    let cleared_count = next_pending.cells.len();
+    for cell in next_pending.cells.drain(..).rev() {
+        candidate.stacks[cell.lane].remove(cell.index);
+    }
+    let mut outcome = prepare_phase(&mut candidate, &mut next_pending, before)?;
+    outcome.points = points;
+    outcome.cleared_count = cleared_count;
+    *board = candidate;
+    *progression = next_progression;
+    *pending = next_pending;
+    Ok(outcome)
+}
+/// Synchronous compatibility transaction, committing each prepared clear phase.
+/// Animated applications use prepare_landing and commit_clear separately instead.
+pub fn land(
+    board: &mut Board,
+    progression: &mut Progression,
+    lane: usize,
+    ball: Ball,
+) -> Result<Outcome, ResolutionError> {
+    let mut candidate = board.clone();
+    let mut next_progression = progression.clone();
+    let mut pending = PendingClear::default();
+    let mut outcome = prepare_landing(&mut candidate, &mut pending, lane, ball)?;
+    while !pending.is_empty() {
+        let next = commit_clear(&mut candidate, &mut next_progression, &mut pending)?;
+        outcome.points = outcome
+            .points
+            .checked_add(next.points)
+            .ok_or(ResolutionError::Score(ScoreError::Overflow))?;
+        outcome.cleared_count += next.cleared_count;
+        outcome.compressed_count += next.compressed_count;
+        outcome.flights.extend(next.flights);
+        outcome.game_over = next.game_over;
+    }
     *board = candidate;
     *progression = next_progression;
     Ok(outcome)
@@ -201,6 +279,147 @@ mod tests {
     fn weight(board: &Board) -> u64 {
         (0..LANE_COUNT).map(|lane| board.total(lane)).sum()
     }
+    fn marked_four() -> (Board, PendingClear) {
+        let mut board = Board::default();
+        let mut pending = PendingClear::default();
+        for lane in 0..4 {
+            assert!(prepare_landing(&mut board, &mut pending, lane, ball(1, &[0])).is_ok());
+        }
+        assert_eq!(pending.cells().len(), 4);
+        (board, pending)
+    }
+    #[test]
+    fn marked_balls_stay_visible_scoreless_and_accept_followup_despite_new_tilt() {
+        let (mut board, mut pending) = marked_four();
+        let mut progression = progress();
+        assert_eq!(weight(&board), 4);
+        assert_eq!(progression.score(), 0);
+        let Ok(prepared) = prepare_landing(&mut board, &mut pending, 0, ball(1, &[0])) else {
+            panic!("followup");
+        };
+        assert_eq!(prepared.points, 0);
+        assert_eq!(prepared.cleared_count, 0);
+        assert_eq!(pending.cells().len(), 5);
+        assert_eq!(weight(&board), 5);
+        // The original horizontal seed is gone after this tilt, but committed
+        // animation membership is retained and its vertical neighbor joins.
+        assert!(matching::cascade_cells(&board).is_empty());
+        let Ok(committed) = commit_clear(&mut board, &mut progression, &mut pending) else {
+            panic!("commit");
+        };
+        assert_eq!(committed.points, 500);
+        assert_eq!(committed.cleared_count, 5);
+        assert_eq!(progression.score(), 500);
+        assert_eq!(weight(&board), 0);
+        assert!(pending.is_empty());
+        assert_eq!(
+            commit_clear(&mut board, &mut progression, &mut pending).map(|outcome| outcome.points),
+            Ok(0)
+        );
+        assert_eq!(progression.score(), 500);
+    }
+    #[test]
+    fn compression_remaps_marked_cells_and_never_clears_a_stale_index() {
+        let (mut board, mut pending) = marked_four();
+        let mut progression = progress();
+        let mut compressed = 0;
+        for _ in 0..4 {
+            let Ok(outcome) = prepare_landing(&mut board, &mut pending, 0, ball(1, &[0])) else {
+                panic!("followup");
+            };
+            compressed += outcome.compressed_count;
+        }
+        assert_eq!(compressed, 1);
+        assert_eq!(pending.cells().len(), 4);
+        assert_eq!(board.stack(0), Some([ball(5, &[0])].as_slice()));
+        assert!(pending.cells().iter().all(|cell| {
+            board
+                .stack(cell.lane)
+                .is_some_and(|stack| cell.index < stack.len())
+        }));
+        let Ok(outcome) = commit_clear(&mut board, &mut progression, &mut pending) else {
+            panic!("commit");
+        };
+        assert_eq!(outcome.points, 800);
+        assert_eq!(outcome.cleared_count, 4);
+        assert_eq!(weight(&board), 0);
+    }
+    #[test]
+    fn emitting_a_marked_top_ball_removes_only_its_mark_and_preserves_ownership() {
+        let (mut board, mut pending) = marked_four();
+        let mut progression = progress();
+        assert!(prepare_landing(&mut board, &mut pending, 0, ball(1, &[0])).is_ok());
+        let Ok(outcome) = prepare_landing(&mut board, &mut pending, 1, ball(3, &[0])) else {
+            panic!("followup");
+        };
+        assert_eq!(outcome.flights.len(), 1);
+        assert_eq!(outcome.flights[0].origin_index, 1);
+        assert!(
+            !pending
+                .cells()
+                .contains(&matching::Cell { lane: 0, index: 1 })
+        );
+        assert_eq!(
+            weight(&board) + u64::from(outcome.flights[0].ball.weight),
+            8
+        );
+        let Ok(clear) = commit_clear(&mut board, &mut progression, &mut pending) else {
+            panic!("commit");
+        };
+        assert_eq!(clear.points, 700);
+        assert_eq!(weight(&board), 0);
+    }
+    #[test]
+    fn failed_prepare_and_commit_preserve_pending_membership_and_state() {
+        let (mut board, mut pending) = marked_four();
+        let before = board.clone();
+        let marks = pending.clone();
+        assert_eq!(
+            prepare_landing(&mut board, &mut pending, 9, ball(1, &[0])),
+            Err(ResolutionError::InvalidLane)
+        );
+        assert_eq!(board, before);
+        assert_eq!(pending, marks);
+        let mut progression = progress();
+        assert_eq!(progression.award(u64::MAX), Ok(()));
+        let score = progression.clone();
+        assert_eq!(
+            commit_clear(&mut board, &mut progression, &mut pending),
+            Err(ResolutionError::Score(ScoreError::Overflow))
+        );
+        assert_eq!(board, before);
+        assert_eq!(pending, marks);
+        assert_eq!(progression, score);
+        // A different-color followup does not automatically enter a sticky group.
+        assert!(prepare_landing(&mut board, &mut pending, 0, ball(1, &[99])).is_ok());
+        assert_eq!(pending.cells().len(), 4);
+    }
+
+    #[test]
+    fn landing_on_a_balanced_beam_uses_its_new_tilt_before_matching() {
+        let mut board = Board::default();
+        let mut progression = progress();
+        // First pair is balanced on physical row one. The third arrival lowers
+        // lane two to row zero, so these three equal colors cannot clear yet.
+        for lane in 0..3 {
+            let Ok(outcome) = land(&mut board, &mut progression, lane, ball(1, &[0])) else {
+                panic!("valid landing");
+            };
+            assert_eq!(outcome.cleared_count, 0);
+            assert_eq!(outcome.points, 0);
+        }
+        assert_eq!(board.capacity(2), Some(9));
+        assert_eq!(progression.score(), 0);
+        // The fourth arrival balances pair two: all four balls now share row one.
+        let Ok(outcome) = land(&mut board, &mut progression, 3, ball(1, &[0])) else {
+            panic!("valid landing");
+        };
+        assert_eq!(outcome.cleared_count, 4);
+        assert_eq!(outcome.points, 400);
+        assert_eq!(weight(&board), 0);
+        assert!(outcome.flights.is_empty());
+    }
+
     #[test]
     fn new_alignment_after_a_launch_exposes_and_resolves_another_seed() {
         let mut board = Board::default();
@@ -233,16 +452,17 @@ mod tests {
             assert!(board.place(0, ball));
         }
         for lane in [1, 2] {
-            assert!(board.place(lane, ball(1, &[0])));
-            assert!(board.place(lane, ball(2, &[1])));
+            assert!(board.place(lane, ball(2, &[0])));
+            assert!(board.place(lane, ball(1, &[1])));
         }
-        assert!(board.place(3, ball(3, &[20])));
+        assert!(board.place(3, ball(2, &[0])));
+        assert!(board.place(3, ball(1, &[20])));
         let initial = weight(&board);
         let Ok(outcome) = land(&mut board, &mut progress(), 7, ball(1, &[99])) else {
             panic!("valid resolution");
         };
-        assert_eq!(outcome.cleared_count, 7);
-        assert_eq!(outcome.points, 900);
+        assert_eq!(outcome.cleared_count, 8);
+        assert_eq!(outcome.points, 1100);
         assert_eq!(board.total(0), 0);
         assert_eq!(board.total(1), 0);
         assert_eq!(board.total(2), 0);

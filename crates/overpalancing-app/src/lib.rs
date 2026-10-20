@@ -1,10 +1,9 @@
 //! Level-driven supply and fixed-stack board shared by desktop and mobile.
+use bevy::log::{error, info, warn};
 use bevy::{prelude::*, window::PrimaryWindow};
 use overpalancing_core::supply::{GenerationError, GeneratorConfig, Supply};
-use overpalancing_core::{
-    Balance, Ball, BallColors, Board, ColorId, Dispenser, LANE_COUNT, SEESAW_COUNT,
-};
-use overpalancing_core::{resolution, scoring::Progression};
+use overpalancing_core::{Ball, BallColors, Board, ColorId, Dispenser, LANE_COUNT, SEESAW_COUNT};
+use overpalancing_core::{matching::Cell, resolution, scoring::Progression};
 use std::collections::VecDeque;
 use std::{
     num::NonZeroU32,
@@ -36,6 +35,7 @@ const WIDTH: f32 = 920.0;
 const HEIGHT: f32 = 2100.0;
 const LEFT: f32 = -400.0;
 const LANE: f32 = 100.0;
+const CLEAR_WINDOW: f64 = 0.45;
 const INK: Color = Color::srgb(0.85, 0.91, 0.98);
 
 #[derive(Resource)]
@@ -74,11 +74,13 @@ impl Playfield {
             error: None,
         })
     }
-    fn drop_ball(&mut self, motion: &mut Motion) -> Result<(), &'static str> {
+    fn drop_ball(&mut self, motion: &mut Motion, clearing: &Clearing) -> Result<(), &'static str> {
         if self.game_over
             || self.error.is_some()
-            || motion.active.is_some()
-            || !motion.queued.is_empty()
+            || (clearing.pending.is_empty()
+                && (motion.active.is_some()
+                    || !motion.queued.is_empty()
+                    || !motion.incoming.is_empty()))
         {
             return Ok(());
         }
@@ -92,12 +94,13 @@ impl Playfield {
         let held = supply
             .take_and_refill(destination, next)
             .map_err(|_| "Unable to refill this lane")?;
-        motion.start(Transit {
+        info!(event="drop_started",lane=destination,weight=held.weight,colors=?held.colors,queue=motion.queued.len(),"Drop started and supply refilled");
+        motion.drop(Transit {
             ball: held,
             destination,
             path: Path::Drop,
             elapsed: 0.0,
-            duration: 0.5,
+            duration: 0.5 / 3.0,
         });
         self.busy = true;
         self.supply = supply;
@@ -119,6 +122,16 @@ impl Playfield {
             self.game_over = false;
             self.busy = false;
             self.error = None;
+            info!(
+                event = "reset",
+                level = self.config.level.get(),
+                "New game started"
+            );
+        } else {
+            error!(
+                event = "reset_failed",
+                "Supply generation failed during reset"
+            );
         }
     }
 }
@@ -236,6 +249,7 @@ pub fn run() {
         })
         .insert_resource(field)
         .init_resource::<Motion>()
+        .init_resource::<Clearing>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Overpalancing - level supply".into(),
@@ -259,6 +273,7 @@ pub fn run() {
                 animate,
                 fit_camera,
                 redraw,
+                pulse_clear,
                 draw_motion,
                 smoke_test,
             )
@@ -308,43 +323,6 @@ fn rect(commands: &mut Commands, x: f32, y: f32, w: f32, h: f32, color: Color, a
         Transform::from_xyz(x, y, 1.0).with_rotation(Quat::from_rotation_z(angle)),
     ));
 }
-fn button(
-    commands: &mut Commands,
-    text: impl Into<String>,
-    x: f32,
-    y: f32,
-    width: f32,
-    selected: bool,
-    scale: f32,
-) {
-    rect(
-        commands,
-        x,
-        y,
-        width,
-        110.0,
-        if selected {
-            Color::srgb(0.25, 0.43, 0.56)
-        } else {
-            Color::srgb(0.12, 0.2, 0.3)
-        },
-        0.0,
-    );
-    label(
-        commands,
-        if selected {
-            format!("[{}]", text.into())
-        } else {
-            text.into()
-        },
-        x,
-        y,
-        24.0,
-        scale,
-        INK,
-    );
-}
-
 fn color(id: ColorId) -> Color {
     match id.index() {
         0 => Color::srgb(0.95, 0.34, 0.38),
@@ -356,61 +334,106 @@ fn color(id: ColorId) -> Color {
         index => Color::hsl((index as f32 * 137.50776) % 360.0, 0.65, 0.65),
     }
 }
-fn names(colors: &BallColors) -> String {
-    colors
-        .iter()
-        .map(|id| format!("C{}", u64::from(id.index()) + 1))
-        .collect::<Vec<_>>()
-        .join("+")
+#[derive(Component)]
+struct StackBall(Cell);
+#[derive(Component)]
+struct GlowCell(Cell);
+#[derive(Resource, Default)]
+struct Clearing {
+    pending: resolution::PendingClear,
+    deadline: Option<f64>,
 }
 fn draw_ball(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<ColorMaterial>,
     ball: &Ball,
-    x: f32,
-    y: f32,
+    position: Vec2,
     scale: f32,
+    cell: Option<Cell>,
 ) {
     let radius = (20.0 * scale).clamp(22.0, 40.0);
     let count = ball.colors.count();
+    let mut parts = Vec::new();
     for (sector, id) in ball.colors.iter().enumerate() {
-        if count == 1 {
-            commands.spawn((
-                Scene,
-                Mesh2d(meshes.add(Circle::new(radius))),
-                MeshMaterial2d(materials.add(color(id))),
-                Transform::from_xyz(x, y, 2.0),
-            ));
+        let mesh = if count == 1 {
+            meshes.add(Circle::new(radius))
         } else {
-            commands.spawn((
-                Scene,
-                Mesh2d(meshes.add(CircularSector::new(
-                    radius,
-                    std::f32::consts::PI / count as f32,
-                ))),
-                MeshMaterial2d(materials.add(color(id))),
-                Transform::from_xyz(x, y, 2.0).with_rotation(Quat::from_rotation_z(
-                    sector as f32 * std::f32::consts::TAU / count as f32,
-                )),
+            meshes.add(CircularSector::new(
+                radius,
+                std::f32::consts::PI / count as f32,
+            ))
+        };
+        parts.push((
+            mesh,
+            materials.add(color(id)),
+            sector as f32 * std::f32::consts::TAU / count as f32,
+        ));
+    }
+    let glow = cell.map(|_| {
+        (
+            meshes.add(Annulus::new(radius + 3.0, radius + 8.0)),
+            materials.add(Color::srgb(1.0, 0.92, 0.5)),
+        )
+    });
+    let mut group = commands.spawn((
+        Scene,
+        Transform::from_xyz(position.x, position.y, 2.0),
+        Visibility::default(),
+    ));
+    if let Some(cell) = cell {
+        group.insert(StackBall(cell));
+    }
+    group.with_children(|children| {
+        for (mesh, material, angle) in parts {
+            children.spawn((
+                Mesh2d(mesh),
+                MeshMaterial2d(material),
+                Transform::from_rotation(Quat::from_rotation_z(angle)),
             ));
         }
+        children.spawn((
+            Text2d::new(ball.weight.to_string()),
+            TextFont {
+                font_size: bevy::text::FontSize::Px((14.0 * scale).max(20.0)),
+                ..default()
+            },
+            TextLayout::justify(Justify::Center),
+            TextColor(Color::BLACK),
+            Transform::from_xyz(0.0, 0.0, 8.0),
+        ));
+        if let (Some(cell), Some((mesh, material))) = (cell, glow) {
+            children.spawn((
+                GlowCell(cell),
+                Mesh2d(mesh),
+                MeshMaterial2d(material),
+                Visibility::Hidden,
+                Transform::from_xyz(0.0, 0.0, 7.0),
+            ));
+        }
+    });
+}
+fn pulse_clear(
+    time: Res<Time>,
+    clearing: Res<Clearing>,
+    mut balls: Query<(&StackBall, &mut Transform)>,
+    mut glows: Query<(&GlowCell, &mut Visibility)>,
+) {
+    let pulse = 0.5 + 0.5 * (time.elapsed_secs() * 16.0).sin();
+    for (ball, mut transform) in &mut balls {
+        transform.scale = Vec3::splat(if clearing.pending.cells().contains(&ball.0) {
+            1.0 - 0.07 * pulse
+        } else {
+            1.0
+        });
     }
-    let ids = ball
-        .colors
-        .iter()
-        .map(|id| (u64::from(id.index()) + 1).to_string())
-        .collect::<Vec<_>>()
-        .join("+");
-    label(
-        commands,
-        format!("{}\n{}", ids, ball.weight),
-        x,
-        y,
-        20.0,
-        scale,
-        Color::BLACK,
-    );
+    for (glow, mut visibility) in &mut glows {
+        *visibility = if clearing.pending.cells().contains(&glow.0) {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
 }
 fn platform_y(board: &Board, lane: usize) -> f32 {
     320.0 - board.capacity(lane).unwrap_or(8) as f32 * 90.0
@@ -475,9 +498,9 @@ fn redraw(
                     &mut meshes,
                     &mut materials,
                     ball,
-                    x,
-                    760.0 + index as f32 * 90.0,
+                    Vec2::new(x, 760.0 + index as f32 * 90.0),
                     scale,
+                    None,
                 );
             }
         }
@@ -501,19 +524,6 @@ fn redraw(
         );
         let base = platform_y(&field.board, lane);
         rect(&mut commands, x, base, 80.0, 12.0, INK, 0.0);
-        label(
-            &mut commands,
-            format!(
-                "{} {}",
-                if lane.is_multiple_of(2) { "L" } else { "R" },
-                field.board.total(lane)
-            ),
-            x,
-            -570.0,
-            20.0,
-            scale,
-            INK,
-        );
         for (index, ball) in field
             .board
             .stack(lane)
@@ -528,9 +538,12 @@ fn redraw(
                 &mut meshes,
                 &mut materials,
                 ball,
-                x,
-                base + 45.0 + index as f32 * 90.0,
+                Vec2::new(x, base + 45.0 + index as f32 * 90.0),
                 scale,
+                Some(Cell {
+                    lane,
+                    index: index + field.offset,
+                }),
             );
         }
     }
@@ -549,9 +562,9 @@ fn redraw(
         &mut meshes,
         &mut materials,
         field.supply.held(),
-        x,
-        570.0,
+        Vec2::new(x, 570.0),
         scale,
+        None,
     );
     rect(
         &mut commands,
@@ -571,26 +584,6 @@ fn redraw(
         Color::srgb(0.95, 0.75, 0.3),
         0.0,
     );
-    label(
-        &mut commands,
-        if field.busy {
-            String::new()
-        } else {
-            format!(
-                "Rows {}-{} | drag to inspect",
-                field.offset + 1,
-                field.offset + 9
-            )
-        },
-        0.0,
-        410.0,
-        18.0,
-        scale,
-        INK,
-    );
-    if let Some(feedback) = &field.feedback {
-        label(&mut commands, feedback, 0.0, 350.0, 18.0, scale, INK);
-    }
     for seesaw in 0..SEESAW_COUNT {
         let left_x = LEFT + (seesaw * 2) as f32 * LANE + LANE / 2.0;
         let a = Vec2::new(left_x, platform_y(&field.board, seesaw * 2));
@@ -615,59 +608,10 @@ fn redraw(
             MeshMaterial2d(materials.add(Color::srgb(0.3, 0.45, 0.6))),
             Transform::from_xyz(middle.x, middle.y - 25.0, 0.0),
         ));
-        label(
-            &mut commands,
-            match field.board.balance(seesaw) {
-                Some(Balance::LeftHeavy) => "L down",
-                Some(Balance::RightHeavy) => "R down",
-                _ => "Equal",
-            },
-            middle.x,
-            -625.0,
-            18.0,
-            scale,
-            INK,
-        );
     }
-    let held = field.supply.held();
     label(
         &mut commands,
-        format!(
-            "Target {}{} | Held {} | Weight {}",
-            field.chute.lane() / 2 + 1,
-            if field.chute.lane().is_multiple_of(2) {
-                "L"
-            } else {
-                "R"
-            },
-            names(&held.colors),
-            held.weight
-        ),
-        0.0,
-        -700.0,
-        20.0,
-        scale,
-        INK,
-    );
-    button(
-        &mut commands,
-        if field.game_over {
-            "STOPPED"
-        } else if field.busy {
-            "BUSY"
-        } else {
-            "DROP"
-        },
-        -210.0,
-        -815.0,
-        390.0,
-        false,
-        scale,
-    );
-    button(&mut commands, "RESET", 210.0, -815.0, 390.0, false, scale);
-    label(
-        &mut commands,
-        "Left/Right or tap: chute | Space: drop\nWheel / drag: inspect | Backspace: reset",
+        "Left/Right or tap: chute | Down: drop\nWheel / drag: inspect | Backspace: reset",
         0.0,
         -960.0,
         18.0,
@@ -682,7 +626,7 @@ fn redraw(
         ));
         commands.spawn((
             Scene,
-            Text2d::new("GAME OVER\nStack capacity exceeded\nReset to play again"),
+            Text2d::new("GAME OVER\nStack capacity exceeded\nBackspace to play again"),
             TextFont {
                 font_size: bevy::text::FontSize::Px((18.0 * scale).max(28.0)),
                 ..default()
@@ -723,9 +667,7 @@ fn pan(
     if keys.just_pressed(KeyCode::ArrowUp) {
         rows += 1;
     }
-    if keys.just_pressed(KeyCode::ArrowDown) {
-        rows -= 1;
-    }
+
     if let Some(touch) = touches
         .iter()
         .find(|touch| touch.distance().length() > 10.0)
@@ -755,8 +697,9 @@ fn input(
     window: Single<&Window, With<PrimaryWindow>>,
     mut field: ResMut<Playfield>,
     mut ignore_mouse: Local<u8>,
-    mut motion: ResMut<Motion>,
+    phases: (ResMut<Motion>, ResMut<Clearing>),
 ) {
+    let (mut motion, mut clearing) = phases;
     let touch_activity =
         touches.iter().next().is_some() || touches.iter_just_released().next().is_some();
     *ignore_mouse = if touch_activity {
@@ -764,8 +707,10 @@ fn input(
     } else {
         ignore_mouse.saturating_sub(1)
     };
-    let mut drop_requested = keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Enter);
-    let mut reset_requested = keys.just_pressed(KeyCode::Backspace);
+    let drop_requested = keys.just_pressed(KeyCode::ArrowDown)
+        || keys.just_pressed(KeyCode::Space)
+        || keys.just_pressed(KeyCode::Enter);
+    let reset_requested = keys.just_pressed(KeyCode::Backspace);
     if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
         field.chute.shift(-1);
     }
@@ -791,18 +736,14 @@ fn input(
             field
                 .chute
                 .select_fraction((point.x - LEFT) / (LANE * LANE_COUNT as f32));
-        } else if (point.y + 815.0).abs() <= 55.0 && (-400.0..=400.0).contains(&point.x) {
-            if point.x < 0.0 {
-                drop_requested = true;
-            } else {
-                reset_requested = true;
-            }
         }
     }
     if reset_requested {
         field.reset();
         motion.clear();
-    } else if drop_requested && let Err(error) = field.drop_ball(&mut motion) {
+        *clearing = Clearing::default();
+    } else if drop_requested && let Err(error) = field.drop_ball(&mut motion, &clearing) {
+        error!(event = "drop_failed", error, "Drop rejected");
         field.error = Some(error);
     }
 }
@@ -828,15 +769,34 @@ struct Transit {
 struct Motion {
     active: Option<Transit>,
     queued: VecDeque<Transit>,
+    incoming: Vec<(u64, Transit)>,
+    next_id: u64,
     revision: u64,
 }
 impl Motion {
+    fn drop(&mut self, transit: Transit) {
+        if self.active.is_none() {
+            self.start(transit);
+        } else {
+            self.next_id = self.next_id.wrapping_add(1).max(1);
+            let id = self.next_id;
+            self.incoming.push((id, transit));
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+    fn transits(&self) -> impl Iterator<Item = (u64, &Transit)> {
+        self.active
+            .iter()
+            .map(|t| (0, t))
+            .chain(self.incoming.iter().map(|(id, t)| (*id, t)))
+    }
     fn start(&mut self, transit: Transit) {
         self.active = Some(transit);
         self.revision = self.revision.wrapping_add(1);
     }
     fn clear(&mut self) {
         self.queued.clear();
+        self.incoming.clear();
         self.active = None;
         self.revision = self.revision.wrapping_add(1);
     }
@@ -844,9 +804,8 @@ impl Motion {
 #[derive(Component)]
 struct TransitVisual {
     target: bool,
+    id: u64,
 }
-#[derive(Component)]
-struct TransitStatus;
 fn lane_x(lane: usize) -> f32 {
     LEFT + (lane as f32 + 0.5) * LANE
 }
@@ -888,78 +847,221 @@ fn transit_position(transit: &Transit, board: &Board, offset: usize) -> Vec2 {
         }
     }
 }
-fn animate(time: Res<Time>, mut field: ResMut<Playfield>, mut motion: ResMut<Motion>) {
-    if field.feedback.is_some() && time.elapsed_secs_f64() >= field.feedback_until {
+fn apply_outcome(
+    field: &mut Playfield,
+    motion: &mut Motion,
+    clearing: &mut Clearing,
+    outcome: resolution::Outcome,
+    at: f64,
+) {
+    field.game_over = outcome.game_over;
+    let previous = field.config.level;
+    field.config.level = field.progression.level();
+    info!(
+        event = "resolution",
+        points = outcome.points,
+        cleared = outcome.cleared_count,
+        compressed = outcome.compressed_count,
+        score = field.progression.score(),
+        level = field.config.level.get(),
+        remaining = field.progression.remaining(),
+        flights = outcome.flights.len(),
+        "Landing phase resolved"
+    );
+    for seesaw in 0..SEESAW_COUNT {
+        info!(event="beam_state",seesaw,left=field.board.total(seesaw*2),right=field.board.total(seesaw*2+1),balance=?field.board.balance(seesaw),"Seesaw evaluated");
+    }
+    if outcome.points > 0 || outcome.compressed_count > 0 {
+        field.feedback = Some(format!(
+            "5->1 x{} | Cleared {} | +{}{}",
+            outcome.compressed_count,
+            outcome.cleared_count,
+            outcome.points,
+            if previous != field.config.level {
+                format!(" | Level {}", field.config.level)
+            } else {
+                String::new()
+            }
+        ));
+        field.feedback_until = at + 3.0;
+    }
+    for flight in outcome.flights {
+        info!(
+            event = "flight_queued",
+            origin = flight.origin,
+            destination = flight.destination,
+            distance = flight.distance,
+            weight = flight.ball.weight,
+            "Ball launched"
+        );
+        let start_y =
+            320.0 - flight.origin_capacity as f32 * 90.0 + 45.0 + flight.origin_index as f32 * 90.0;
+        let duration = 0.9 + visible_steps(flight.distance) * 0.04;
+        motion.queued.push_back(Transit {
+            ball: flight.ball,
+            destination: flight.destination,
+            path: Path::Launch {
+                origin: flight.origin,
+                distance: flight.distance,
+                rightward: flight.origin.is_multiple_of(2),
+                start_y,
+            },
+            elapsed: 0.0,
+            duration,
+        });
+    }
+    if clearing.pending.is_empty() {
+        clearing.deadline = None;
+    } else if clearing.deadline.is_none() {
+        let deadline = at + CLEAR_WINDOW;
+        clearing.deadline = Some(deadline);
+        info!(
+            event = "clear_started",
+            pending = clearing.pending.cells().len(),
+            deadline,
+            "Clear window opened"
+        );
+    }
+    if field.game_over {
+        warn!(
+            event = "game_over",
+            score = field.progression.score(),
+            "Stack capacity exceeded"
+        );
+    }
+}
+fn commit_pending(field: &mut Playfield, motion: &mut Motion, clearing: &mut Clearing, at: f64) {
+    let outcome = resolution::commit_clear(
+        &mut field.board,
+        &mut field.progression,
+        &mut clearing.pending,
+    );
+    match outcome {
+        Ok(outcome) => {
+            info!(
+                event = "clear_committed",
+                points = outcome.points,
+                cleared = outcome.cleared_count,
+                score = field.progression.score(),
+                level = field.progression.level().get(),
+                "Clear committed"
+            );
+            clearing.deadline = None;
+            apply_outcome(field, motion, clearing, outcome, at);
+        }
+        Err(reason) => {
+            error!(event="clear_failed",error=?reason,"Clear paused without mutation");
+            field.error = Some("Clear paused - Backspace to reset");
+        }
+    }
+}
+fn animate(
+    time: Res<Time>,
+    mut field: ResMut<Playfield>,
+    mut motion: ResMut<Motion>,
+    mut clearing: ResMut<Clearing>,
+) {
+    let now = time.elapsed_secs_f64();
+    if field.feedback.is_some() && now >= field.feedback_until {
         field.feedback = None;
     }
     if field.game_over || field.error.is_some() {
         return;
     }
-    let Some(active) = motion.active.as_mut() else {
-        return;
-    };
-    active.elapsed += time.delta_secs();
-    if active.elapsed < active.duration {
-        return;
+    let mut completed = Vec::new();
+    if let Some(active) = motion.active.as_mut() {
+        active.elapsed += time.delta_secs();
+        if active.elapsed >= active.duration {
+            let at = now - f64::from(active.elapsed - active.duration);
+            if let Some(active) = motion.active.take() {
+                completed.push((at, active));
+            }
+        }
     }
-    let Some(landed) = motion.active.take() else {
-        return;
-    };
-    let outcome = {
-        let Playfield {
-            board, progression, ..
-        } = &mut *field;
-        resolution::land(board, progression, landed.destination, landed.ball.clone())
-    };
-    match outcome {
-        Ok(outcome) => {
-            field.game_over = outcome.game_over;
-            let previous = field.config.level;
-            field.config.level = field.progression.level();
-            if outcome.points > 0 || outcome.compressed_count > 0 || previous != field.config.level
-            {
-                let level_notice = if previous != field.config.level {
-                    format!(" | Level {}", field.config.level)
-                } else {
-                    String::new()
-                };
-                field.feedback = Some(format!(
-                    "5->1 x{} | Cleared {} | +{}{}",
-                    outcome.compressed_count, outcome.cleared_count, outcome.points, level_notice
-                ));
-                field.feedback_until = time.elapsed_secs_f64() + 3.0;
+    for (_, incoming) in &mut motion.incoming {
+        incoming.elapsed += time.delta_secs();
+    }
+    let mut index = 0;
+    while index < motion.incoming.len() {
+        if motion.incoming[index].1.elapsed >= motion.incoming[index].1.duration {
+            let (_, incoming) = motion.incoming.remove(index);
+            completed.push((
+                now - f64::from(incoming.elapsed - incoming.duration),
+                incoming,
+            ));
+        } else {
+            index += 1;
+        }
+    }
+    completed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut events = VecDeque::from(completed);
+    while let Some((at, landed)) = events.pop_front() {
+        // Arrivals exactly at the deadline still join the pending group.
+        while field.error.is_none()
+            && !field.game_over
+            && let Some(deadline) = clearing.deadline
+            && deadline < at
+        {
+            commit_pending(&mut field, &mut motion, &mut clearing, deadline);
+        }
+        if field.error.is_some() || field.game_over {
+            motion.drop(landed);
+            for (_, remaining) in events {
+                motion.drop(remaining);
             }
-            for flight in outcome.flights {
-                let start_y = 320.0 - flight.origin_capacity as f32 * 90.0
-                    + 45.0
-                    + flight.origin_index as f32 * 90.0;
-                let duration = 0.9 + visible_steps(flight.distance) * 0.04;
-                motion.queued.push_back(Transit {
-                    ball: flight.ball,
-                    destination: flight.destination,
-                    path: Path::Launch {
-                        origin: flight.origin,
-                        distance: flight.distance,
-                        rightward: flight.origin.is_multiple_of(2),
-                        start_y,
-                    },
-                    elapsed: 0.0,
-                    duration,
-                });
+            break;
+        }
+        info!(
+            event = "landing",
+            lane = landed.destination,
+            weight = landed.ball.weight,
+            "Ball landed"
+        );
+        match resolution::prepare_landing(
+            &mut field.board,
+            &mut clearing.pending,
+            landed.destination,
+            landed.ball.clone(),
+        ) {
+            Ok(outcome) => {
+                apply_outcome(&mut field, &mut motion, &mut clearing, outcome, at);
+                motion.revision = motion.revision.wrapping_add(1);
             }
-            if let Some(next) = motion.queued.pop_front() {
-                motion.start(next);
-                field.busy = true;
-            } else {
-                motion.clear();
-                field.busy = false;
+            Err(reason) => {
+                error!(event="resolution_failed",error=?reason,"In-transit ball preserved");
+                field.error = Some("Resolution paused - Backspace to reset");
+                motion.drop(landed);
+                for (_, remaining) in events {
+                    motion.drop(remaining);
+                }
+                break;
             }
         }
-        Err(_) => {
-            field.error = Some("Resolution paused - reset to recover");
-            motion.start(landed);
-            field.busy = true;
-        }
+    }
+    while field.error.is_none()
+        && !field.game_over
+        && let Some(deadline) = clearing.deadline
+        && deadline <= now
+    {
+        commit_pending(&mut field, &mut motion, &mut clearing, deadline);
+    }
+    if motion.active.is_none()
+        && let Some(next) = motion.queued.pop_front()
+    {
+        info!(
+            event = "queue_advanced",
+            remaining = motion.queued.len(),
+            destination = next.destination,
+            "Next flight started"
+        );
+        motion.start(next);
+    }
+    let busy = motion.active.is_some()
+        || !motion.incoming.is_empty()
+        || !motion.queued.is_empty()
+        || !clearing.pending.is_empty();
+    if field.busy != busy {
+        field.busy = busy;
     }
 }
 fn draw_motion(
@@ -968,7 +1070,6 @@ fn draw_motion(
     window: Single<&Window, With<PrimaryWindow>>,
     assets: (ResMut<Assets<Mesh>>, ResMut<Assets<ColorMaterial>>),
     mut visuals: Query<(Entity, &mut Transform, &TransitVisual)>,
-    mut statuses: Query<(Entity, &mut Text2d), With<TransitStatus>>,
     mut cache: Local<(Option<u64>, f32)>,
 ) {
     let (field, motion) = state;
@@ -981,12 +1082,9 @@ fn draw_motion(
         for (entity, _, _) in &mut visuals {
             commands.entity(entity).despawn();
         }
-        for (entity, _) in &statuses {
-            commands.entity(entity).despawn();
-        }
         cache.0 = Some(motion.revision);
         cache.1 = scale;
-        if let Some(active) = &motion.active {
+        for (id, active) in motion.transits() {
             let position = transit_position(active, &field.board, field.offset);
             let radius = (20.0 * scale).clamp(22.0, 40.0);
             let mut parts = Vec::new();
@@ -1006,16 +1104,9 @@ fn draw_motion(
                     sector as f32 * std::f32::consts::TAU / count as f32,
                 ));
             }
-            let cue = active
-                .ball
-                .colors
-                .iter()
-                .map(|id| (u64::from(id.index()) + 1).to_string())
-                .collect::<Vec<_>>()
-                .join("+");
             commands
                 .spawn((
-                    TransitVisual { target: false },
+                    TransitVisual { target: false, id },
                     Transform::from_xyz(position.x, position.y, 40.0),
                     Visibility::default(),
                 ))
@@ -1028,7 +1119,7 @@ fn draw_motion(
                         ));
                     }
                     children.spawn((
-                        Text2d::new(format!("{}\n{}", cue, active.ball.weight)),
+                        Text2d::new(active.ball.weight.to_string()),
                         TextFont {
                             font_size: bevy::text::FontSize::Px((14.0 * scale).max(20.0)),
                             ..default()
@@ -1039,7 +1130,7 @@ fn draw_motion(
                     ));
                 });
             commands.spawn((
-                TransitVisual { target: true },
+                TransitVisual { target: true, id },
                 Mesh2d(meshes.add(Annulus::new(radius + 4.0, radius + 8.0))),
                 MeshMaterial2d(materials.add(Color::srgb(0.95, 0.75, 0.3))),
                 Transform::from_xyz(
@@ -1048,59 +1139,22 @@ fn draw_motion(
                     35.0,
                 ),
             ));
-            commands.spawn((
-                TransitStatus,
-                Text2d::new(format!(
-                    "{} | Queue {}",
-                    transit_status(active, field.game_over || field.error.is_some()),
-                    motion.queued.len()
-                )),
-                TextFont {
-                    font_size: bevy::text::FontSize::Px((14.0 * scale).max(20.0)),
-                    ..default()
-                },
-                TextColor(INK),
-                Transform::from_xyz(0.0, 410.0, 40.0),
-            ));
         }
-    } else if let Some(active) = &motion.active {
-        let position = transit_position(active, &field.board, field.offset);
-        for (_, mut transform, visual) in &mut visuals {
-            let at = if visual.target {
-                Vec2::new(
-                    lane_x(active.destination),
-                    landing_y(&field.board, active.destination) - field.offset as f32 * 90.0,
-                )
-            } else {
-                position
-            };
-            transform.translation.x = at.x;
-            transform.translation.y = at.y;
-        }
-        for (_, mut text) in &mut statuses {
-            text.0 = format!(
-                "{} | Queue {}",
-                transit_status(active, field.game_over || field.error.is_some()),
-                motion.queued.len()
-            );
-        }
-    }
-}
-fn transit_status(active: &Transit, frozen: bool) -> String {
-    let phase = if frozen {
-        "Frozen"
-    } else if active.elapsed >= active.duration * 0.85 {
-        "Landing"
     } else {
-        match active.path {
-            Path::Drop => "Dropping",
-            Path::Launch { .. } => "Launching",
-        }
-    };
-    match active.path {
-        Path::Drop => format!("{} > lane {}", phase, active.destination + 1),
-        Path::Launch { distance, .. } => {
-            format!("{} {} lanes > {}", phase, distance, active.destination + 1)
+        for (_, mut transform, visual) in &mut visuals {
+            if let Some((_, active)) = motion.transits().find(|(id, _)| *id == visual.id) {
+                let position = transit_position(active, &field.board, field.offset);
+                let at = if visual.target {
+                    Vec2::new(
+                        lane_x(active.destination),
+                        landing_y(&field.board, active.destination) - field.offset as f32 * 90.0,
+                    )
+                } else {
+                    position
+                };
+                transform.translation.x = at.x;
+                transform.translation.y = at.y;
+            }
         }
     }
 }
@@ -1139,6 +1193,7 @@ mod tests {
                     .unwrap_or_else(|e| panic!("fixture: {e:?}")),
             )
             .init_resource::<Motion>()
+            .init_resource::<Clearing>()
             .add_systems(Update, (pan, input, animate).chain());
         let window = app
             .world_mut()
@@ -1283,7 +1338,8 @@ mod tests {
             .previews(0)
             .cloned();
         key(&mut app, KeyCode::ArrowRight);
-        key(&mut app, KeyCode::Space);
+        key(&mut app, KeyCode::ArrowDown);
+        assert_eq!(app.world().resource::<Playfield>().offset, 0);
         assert!(app.world().resource::<Playfield>().busy);
         assert_eq!(app.world().resource::<Playfield>().board.total(1), 0);
         advance(&mut app);
@@ -1302,27 +1358,24 @@ mod tests {
         assert_eq!(field.supply.held(), &source[1]);
     }
     #[test]
-    fn real_touch_drop_ignores_same_and_next_frame_synthesized_mouse() {
+    fn real_touch_selection_ignores_same_and_next_frame_synthesized_mouse() {
         use bevy::input::{ButtonState, mouse::MouseButtonInput};
         let (mut app, window) = input_app();
+        let supply = app.world().resource::<Playfield>().supply.clone();
         let scale = view_scale(390.0, 844.0).unwrap_or(1.0);
         app.world_mut()
             .entity_mut(window)
             .get_mut::<Window>()
             .unwrap_or_else(|| panic!("window"))
-            .set_cursor_position(Some(Vec2::new(
-                195.0 - 210.0 / scale,
-                422.0 + 815.0 / scale,
-            )));
-        touch(&mut app, window, TouchPhase::Started, -210.0, -815.0, 22);
+            .set_cursor_position(Some(Vec2::new(195.0 - 350.0 / scale, 422.0)));
+        touch(&mut app, window, TouchPhase::Started, 350.0, 0.0, 22);
         app.world_mut().write_message(MouseButtonInput {
             button: MouseButton::Left,
             state: ButtonState::Pressed,
             window,
         });
-        touch(&mut app, window, TouchPhase::Ended, -210.0, -815.0, 22);
-        assert!(app.world().resource::<Motion>().active.is_some());
-        assert_eq!(app.world().resource::<Playfield>().board.total(0), 0);
+        touch(&mut app, window, TouchPhase::Ended, 350.0, 0.0, 22);
+        assert_eq!(app.world().resource::<Playfield>().chute.lane(), 7);
         app.world_mut().write_message(MouseButtonInput {
             button: MouseButton::Left,
             state: ButtonState::Released,
@@ -1334,15 +1387,11 @@ mod tests {
             window,
         });
         app.update();
-        advance(&mut app);
-        assert_eq!(
-            app.world()
-                .resource::<Playfield>()
-                .board
-                .stack(0)
-                .map(<[Ball]>::len),
-            Some(1)
-        );
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.chute.lane(), 7);
+        assert_eq!(field.supply, supply);
+        assert_eq!(field.board, Board::default());
+        assert!(app.world().resource::<Motion>().active.is_none());
     }
     #[test]
     fn untouched_raised_stack_ends_game_blocks_supply_and_reset_restores() {
@@ -1473,7 +1522,7 @@ mod tests {
             assert_eq!(visible_steps(distance), 10.0);
             let position = transit_position(&transit, &Board::default(), 0);
             assert!((position.x - lane_x(destination)).abs() < 0.01);
-            assert!(transit_status(&transit, false).contains(&distance.to_string()));
+            assert!(matches!(transit.path,Path::Launch{distance:exact,..} if exact==distance));
         }
     }
     #[test]
@@ -1568,13 +1617,13 @@ mod tests {
         app
     }
     #[test]
-    fn actual_keypresses_clear_triples_and_continue_into_level_two() {
+    fn actual_keypresses_clear_four_and_continue_into_level_two() {
         let mut app = level_one_app();
-        for group in 0..4 {
+        for group in 0..3 {
             for _ in 0..3 {
                 key(&mut app, KeyCode::ArrowLeft);
             }
-            for lane in 0..3 {
+            for lane in 0..4 {
                 if lane > 0 {
                     key(&mut app, KeyCode::ArrowRight);
                 }
@@ -1582,7 +1631,7 @@ mod tests {
                 advance(&mut app);
             }
             let field = app.world().resource::<Playfield>();
-            assert_eq!(field.progression.score(), (group + 1) * 300);
+            assert_eq!(field.progression.score(), (group + 1) * 400);
             assert_eq!(field.board, Board::default());
         }
         let field = app.world().resource::<Playfield>();
@@ -1652,7 +1701,16 @@ mod tests {
             puzzle_demo().unwrap_or_else(|e| panic!("fixture {e:?}"));
         assert_eq!(app.world().resource::<Playfield>().supply.held().weight, 2);
         key(&mut app, KeyCode::Space);
-        advance(&mut app);
+        step(&mut app, 0.17);
+        assert_eq!(app.world().resource::<Playfield>().progression.score(), 0);
+        assert!(
+            app.world()
+                .resource::<Playfield>()
+                .feedback
+                .as_ref()
+                .is_some_and(|text| text.contains("5->1 x1"))
+        );
+        step(&mut app, 0.46);
         let field = app.world().resource::<Playfield>();
         assert_eq!(field.progression.score(), 600);
         assert_eq!(
@@ -1670,7 +1728,7 @@ mod tests {
             field
                 .feedback
                 .as_ref()
-                .is_some_and(|text| text.contains("5->1 x1 | Cleared 6 | +600"))
+                .is_some_and(|text| text.contains("Cleared 6 | +600"))
         );
         assert!(!field.game_over);
     }
@@ -1777,5 +1835,161 @@ mod tests {
             app.world().resource::<Playfield>().progression.score(),
             1200
         );
+    }
+    fn step(app: &mut App, seconds: f64) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f64(seconds));
+        app.world_mut().run_schedule(Update);
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::ZERO);
+    }
+    fn begin_four_clear() -> App {
+        let mut app = level_one_app();
+        for lane in 0..3 {
+            if lane > 0 {
+                key(&mut app, KeyCode::ArrowRight);
+            }
+            key(&mut app, KeyCode::ArrowDown);
+            advance(&mut app);
+        }
+        key(&mut app, KeyCode::ArrowRight);
+        key(&mut app, KeyCode::ArrowDown);
+        let transit = app
+            .world()
+            .resource::<Motion>()
+            .active
+            .as_ref()
+            .unwrap_or_else(|| panic!("incoming"));
+        assert!((transit.duration - 1.0 / 6.0).abs() < 0.00001);
+        assert_eq!(app.world().resource::<Playfield>().offset, 0);
+        step(&mut app, 0.17);
+        assert_eq!(app.world().resource::<Clearing>().pending.cells().len(), 4);
+        assert_eq!(app.world().resource::<Playfield>().progression.score(), 0);
+        app
+    }
+    #[test]
+    fn fast_followup_joins_fixed_clear_window_and_awards_five_hundred_once() {
+        let mut app = begin_four_clear();
+        let deadline = app.world().resource::<Clearing>().deadline;
+        for _ in 0..3 {
+            key(&mut app, KeyCode::ArrowLeft);
+        }
+        key(&mut app, KeyCode::ArrowDown);
+        step(&mut app, 0.17);
+        assert_eq!(app.world().resource::<Clearing>().deadline, deadline);
+        assert_eq!(app.world().resource::<Clearing>().pending.cells().len(), 5);
+        assert_eq!(app.world().resource::<Playfield>().progression.score(), 0);
+        step(&mut app, 0.28);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.progression.score(), 500);
+        assert_eq!(field.board, Board::default());
+        assert!(app.world().resource::<Clearing>().pending.is_empty());
+        advance(&mut app);
+        assert_eq!(app.world().resource::<Playfield>().progression.score(), 500);
+    }
+    #[test]
+    fn arrival_after_clear_deadline_stays_a_normal_new_ball() {
+        let mut app = begin_four_clear();
+        step(&mut app, 0.40);
+        for _ in 0..3 {
+            key(&mut app, KeyCode::ArrowLeft);
+        }
+        key(&mut app, KeyCode::ArrowDown);
+        step(&mut app, 0.17);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.progression.score(), 400);
+        assert_eq!(field.board.stack(0), Some([ball(1)].as_slice()));
+        assert!(app.world().resource::<Clearing>().pending.is_empty());
+    }
+    #[test]
+    fn multiple_incoming_streams_are_allowed_during_glow_and_reset_cancels_all() {
+        let mut app = begin_four_clear();
+        key(&mut app, KeyCode::ArrowDown);
+        key(&mut app, KeyCode::ArrowDown);
+        assert_eq!(app.world().resource::<Motion>().incoming.len(), 1);
+        assert!(app.world().resource::<Motion>().active.is_some());
+        key(&mut app, KeyCode::Backspace);
+        assert!(app.world().resource::<Clearing>().pending.is_empty());
+        assert!(app.world().resource::<Clearing>().deadline.is_none());
+        let motion = app.world().resource::<Motion>();
+        assert!(motion.active.is_none());
+        assert!(motion.incoming.is_empty());
+        assert!(motion.queued.is_empty());
+        advance(&mut app);
+        assert_eq!(app.world().resource::<Playfield>().board, Board::default());
+        assert_eq!(app.world().resource::<Playfield>().progression.score(), 0);
+    }
+    #[test]
+    fn long_frame_commits_two_expired_clear_phases_before_a_late_arrival() {
+        let (mut app, _) = input_app();
+        {
+            let mut field = app.world_mut().resource_mut::<Playfield>();
+            field.progression = Progression::new(NonZeroU32::MIN);
+            field.config.level = NonZeroU32::MIN;
+            for (lane, stack) in [
+                (0, vec![(1, 0), (1, 0), (1, 1)]),
+                (1, vec![(2, 0), (1, 1)]),
+                (2, vec![(2, 0), (1, 1)]),
+                (3, vec![(2, 0), (1, 20)]),
+            ] {
+                for (weight, id) in stack {
+                    field.board.place(
+                        lane,
+                        Ball {
+                            weight,
+                            colors: BallColors::single(ColorId::new(id)),
+                        },
+                    );
+                }
+            }
+            field.busy = true;
+        }
+        {
+            let mut motion = app.world_mut().resource_mut::<Motion>();
+            motion.start(Transit {
+                ball: Ball {
+                    weight: 1,
+                    colors: BallColors::single(ColorId::new(99)),
+                },
+                destination: 7,
+                path: Path::Drop,
+                elapsed: 0.0,
+                duration: 1.0 / 6.0,
+            });
+            motion.drop(Transit {
+                ball: Ball {
+                    weight: 1,
+                    colors: BallColors::single(ColorId::BLUE),
+                },
+                destination: 0,
+                path: Path::Drop,
+                elapsed: 0.0,
+                duration: 1.5,
+            });
+        }
+        advance(&mut app);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.progression.score(), 1100);
+        assert_eq!(field.progression.level().get(), 2);
+        assert_eq!(field.progression.remaining(), 1900);
+        assert_eq!(
+            field.board.stack(0),
+            Some(
+                [Ball {
+                    weight: 1,
+                    colors: BallColors::single(ColorId::BLUE)
+                }]
+                .as_slice()
+            )
+        );
+        assert_eq!(field.board.total(3), 1);
+        assert_eq!(field.board.total(7), 1);
+        assert!(app.world().resource::<Clearing>().pending.is_empty());
+        assert!(app.world().resource::<Clearing>().deadline.is_none());
     }
 }

@@ -133,7 +133,18 @@ pub fn cascade_cells(board: &Board) -> Vec<Cell> {
 }
 pub(crate) fn cascade_at(board: &Board, capacities: &[usize; LANE_COUNT]) -> Vec<Cell> {
     let groups = detect_at(board, capacities);
-    let mut selected: BTreeSet<_> = unique_cells(&groups).into_iter().collect();
+    expand_at(board, capacities, &unique_cells(&groups))
+}
+pub(crate) fn expand_at(
+    board: &Board,
+    capacities: &[usize; LANE_COUNT],
+    seeds: &[Cell],
+) -> Vec<Cell> {
+    let mut selected: BTreeSet<_> = seeds
+        .iter()
+        .copied()
+        .filter(|cell| ball(board, *cell).is_some())
+        .collect();
     let mut pending: Vec<_> = selected.iter().copied().collect();
     while let Some(cell) = pending.pop() {
         let Some(current) = ball(board, cell) else {
