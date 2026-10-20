@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="style.css"><title>Color accessibility · Overpalancing</title></head>
+<body>
+<header><nav aria-label="Documentation"><a href="index.html">Overpalancing documentation</a></nav></header>
+<main>
+<h1>Color and shape cues</h1>
+<p>Ball colors gain procedural shape and pattern cues so similar fills are easier to distinguish. Original geometry is rendered directly; no image assets, external fonts or new dependency are required. These cues supplement the fill color and do not change matching, weight or joker rules.</p>
+<h2>Stable visual vocabulary</h2>
+<p>Every palette color receives a mark, including the early colors. Use the same deterministic ColorId mapping for previews, held balls, stationary balls and balls moving through drops or flights.</p>
+<table><caption>Initial twelve-cue family</caption><thead><tr><th scope="col">ColorId</th><th scope="col">Shape</th><th scope="col">Pattern</th></tr></thead><tbody>
+<tr><td>0 / 6</td><td>Triangle</td><td>Plain / diagonal stripes</td></tr>
+<tr><td>1 / 7</td><td>Square</td><td>Plain / diagonal stripes</td></tr>
+<tr><td>2 / 8</td><td>Diamond</td><td>Plain / diagonal stripes</td></tr>
+<tr><td>3 / 9</td><td>Plus</td><td>Plain / diagonal stripes</td></tr>
+<tr><td>4 / 10</td><td>X</td><td>Plain / diagonal stripes</td></tr>
+<tr><td>5 / 11</td><td>Star</td><td>Plain / diagonal stripes</td></tr>
+</tbody></table>
+<p>This is a finite vocabulary. Higher identifiers reuse cues deterministically; it does not promise a unique pattern for every possible level or color. Palette expansion needs actual readability review rather than ever-smaller details.</p>
+<h2>Readable weights and jokers</h2>
+<p>At approximately 37-pixel ball diameter in a 390-pixel portrait view, prefer a few bold lines to intricate decoration. Single-color balls use a large outlined shape around a slim, high-contrast central weight plate. Joker sectors use fixed-size outer marks rather than shrinking them into dots. The plate masks shapes and stripes behind the weight so neither conceals the number.</p>
+<p>Each two- or three-color joker sector gets its own color's mark and pattern, clipped to that sector. Keep the center weight readable and avoid implying that one sector represents the entire joker. The same sector assignment must remain stable while the ball moves.</p>
+<h2>Verification status</h2>
+<p>On 2026-10-20, the UX engineer reviewed actual twelve-color desktop and 390-pixel portrait renders, dropping and settled frames, and a wrapped-flight frame. The initial tiny rim marks failed recognition review; the revised large outlines and fixed-size joker marks pass at these inspected sizes. Triangle, square, diamond, plus, X and star cues are recognizable; striped variants remain distinct. Two- and three-color sectors retain separate marks, weights 12 and 125 remain readable, and the same cues appear on moving balls. This establishes visual review of the tested fixture, not universal recognizability at arbitrary sizes or levels. Phone execution, user testing with color-vision differences and customer acceptance remain separate.</p>
+<h2>Try the palette fixture</h2><pre><code>cargo run --locked -p overpalancing-app --bin overpalancing -- --palette-demo</code></pre><p>Use Down to inspect a marked ball during a drop. The fixture includes twelve palette cues, multicolor jokers and a three-digit weight.</p><h2>Review evidence</h2><ul><li><a href="evidence/color-cues-desktop.png">Twelve-color desktop fixture</a></li><li><a href="evidence/color-cues-390.png">Portrait symbols, patterns and joker sectors</a></li><li><a href="evidence/color-cues-drop-390.png">Marked ball during a drop</a> · <a href="evidence/color-cues-flight-390.png">marked ball during a wrapped flight</a></li><li><a href="evidence/color-cues-clear-390.png">Clear glow preserves symbols and weights</a></li></ul>
+<p>Local verification passes 79 nextest tests, fmt, warnings-denied Clippy and rustdoc, doctests, audit, deny, nine PR-policy tests, actionlint, and authored/generated HTML link checks. The existing indirect ttf-parser maintenance advisory remains visible. Actual Linux Vulkan/Xvfb keyboard input exercised the palette and wrapped-flight fixtures plus normal-play clear, follow-up throw, Reset and compression. Platform CI and owner acceptance are tracked separately.</p></main>
+</body>
+</html>

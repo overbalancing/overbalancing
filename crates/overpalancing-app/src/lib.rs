@@ -1,4 +1,5 @@
 //! Level-driven supply and fixed-stack board shared by desktop and mobile.
+mod ball_visual;
 use bevy::log::{error, info, warn};
 use bevy::{prelude::*, window::PrimaryWindow};
 use overpalancing_core::supply::{GenerationError, GeneratorConfig, Supply};
@@ -35,6 +36,7 @@ const WIDTH: f32 = 920.0;
 const HEIGHT: f32 = 2100.0;
 const LEFT: f32 = -400.0;
 const LANE: f32 = 100.0;
+const ROW_HEIGHT: f32 = 96.0;
 const CLEAR_WINDOW: f64 = 0.45;
 const INK: Color = Color::srgb(0.85, 0.91, 0.98);
 
@@ -201,6 +203,42 @@ fn wrap_demo(rightward: bool) -> Result<Playfield, GenerationError> {
     }
     Ok(field)
 }
+// Opt-in visual review: all twelve finite cue combinations and multi-color examples.
+fn palette_demo() -> Result<Playfield, GenerationError> {
+    let mut field = Playfield::new(
+        NonZeroU32::new(12).unwrap_or(NonZeroU32::MIN),
+        Random::seeded(),
+    )?;
+    let mut samples = Vec::new();
+    for index in 0..17u64 {
+        let weight = if index == 0 { 6 } else { index % 7 };
+        samples.extend([weight + 7 * 100, 12 * 100 + index % 12, 99]);
+    }
+    let mut samples = samples.into_iter();
+    field.supply = Supply::new(field.config, &mut || samples.next().unwrap_or(u64::MAX))?;
+    for lane in 0..LANE_COUNT {
+        let ids = match lane {
+            0 => vec![0],
+            1 => vec![1],
+            2 => vec![2, 8],
+            3 => vec![3, 9],
+            4 => vec![4, 10, 11],
+            5 => vec![5, 6, 7],
+            6 => vec![6],
+            _ => vec![11],
+        };
+        let colors = BallColors::new(&ids.into_iter().map(ColorId::new).collect::<Vec<_>>())
+            .unwrap_or_else(|| panic!("fixture colors"));
+        field.board.place(
+            lane,
+            Ball {
+                weight: if lane == 6 { 125 } else { 12 },
+                colors,
+            },
+        );
+    }
+    Ok(field)
+}
 impl Default for Playfield {
     fn default() -> Self {
         match Self::new(NonZeroU32::MIN, Random::seeded()) {
@@ -239,7 +277,9 @@ pub fn run() {
             return;
         }
     };
-    let field = match if args.iter().any(|arg| arg == "--wrap-left-demo") {
+    let field = match if args.iter().any(|arg| arg == "--palette-demo") {
+        palette_demo()
+    } else if args.iter().any(|arg| arg == "--wrap-left-demo") {
         wrap_demo(false)
     } else if args.iter().any(|arg| arg == "--wrap-right-demo") {
         wrap_demo(true)
@@ -371,24 +411,8 @@ fn draw_ball(
     scale: f32,
     cell: Option<Cell>,
 ) {
-    let radius = (20.0 * scale).clamp(22.0, 40.0);
-    let count = ball.colors.count();
-    let mut parts = Vec::new();
-    for (sector, id) in ball.colors.iter().enumerate() {
-        let mesh = if count == 1 {
-            meshes.add(Circle::new(radius))
-        } else {
-            meshes.add(CircularSector::new(
-                radius,
-                std::f32::consts::PI / count as f32,
-            ))
-        };
-        parts.push((
-            mesh,
-            materials.add(color(id)),
-            sector as f32 * std::f32::consts::TAU / count as f32,
-        ));
-    }
+    let visual = ball_visual::build(ball, meshes, materials, scale);
+    let radius = ball_visual::radius(scale);
     let glow = cell.map(|_| {
         (
             meshes.add(Annulus::new(radius + 3.0, radius + 8.0)),
@@ -404,23 +428,7 @@ fn draw_ball(
         group.insert(StackBall(cell));
     }
     group.with_children(|children| {
-        for (mesh, material, angle) in parts {
-            children.spawn((
-                Mesh2d(mesh),
-                MeshMaterial2d(material),
-                Transform::from_rotation(Quat::from_rotation_z(angle)),
-            ));
-        }
-        children.spawn((
-            Text2d::new(ball.weight.to_string()),
-            TextFont {
-                font_size: bevy::text::FontSize::Px((14.0 * scale).max(20.0)),
-                ..default()
-            },
-            TextLayout::justify(Justify::Center),
-            TextColor(Color::BLACK),
-            Transform::from_xyz(0.0, 0.0, 8.0),
-        ));
+        ball_visual::spawn(children, visual);
         if let (Some(cell), Some((mesh, material))) = (cell, glow) {
             children.spawn((
                 GlowCell(cell),
@@ -455,7 +463,7 @@ fn pulse_clear(
     }
 }
 fn platform_y(board: &Board, lane: usize) -> f32 {
-    320.0 - board.capacity(lane).unwrap_or(8) as f32 * 90.0
+    320.0 - board.capacity(lane).unwrap_or(8) as f32 * ROW_HEIGHT
 }
 fn redraw(
     mut commands: Commands,
@@ -506,7 +514,7 @@ fn redraw(
             x,
             805.0,
             88.0,
-            190.0,
+            200.0,
             Color::srgb(0.08, 0.14, 0.2),
             0.0,
         );
@@ -517,7 +525,7 @@ fn redraw(
                     &mut meshes,
                     &mut materials,
                     ball,
-                    Vec2::new(x, 760.0 + index as f32 * 90.0),
+                    Vec2::new(x, 760.0 + index as f32 * ROW_HEIGHT),
                     scale,
                     None,
                 );
@@ -545,7 +553,7 @@ fn redraw(
             &mut commands,
             field.board.total(lane).to_string(),
             x,
-            -570.0,
+            -610.0,
             20.0,
             scale,
             INK,
@@ -566,7 +574,7 @@ fn redraw(
                 &mut meshes,
                 &mut materials,
                 ball,
-                Vec2::new(x, base + 45.0 + index as f32 * 90.0),
+                Vec2::new(x, base + ROW_HEIGHT / 2.0 + index as f32 * ROW_HEIGHT),
                 scale,
                 Some(Cell {
                     lane,
@@ -701,10 +709,10 @@ fn pan(
         .find(|touch| touch.distance().length() > 10.0)
     {
         *carry += touch.delta().y * scale;
-        while carry.abs() >= 90.0 {
+        while carry.abs() >= ROW_HEIGHT {
             let direction = if *carry > 0.0 { 1 } else { -1 };
             rows += direction;
-            *carry -= direction as f32 * 90.0;
+            *carry -= direction as f32 * ROW_HEIGHT;
         }
     } else {
         *carry = 0.0;
@@ -838,7 +846,9 @@ fn lane_x(lane: usize) -> f32 {
     LEFT + (lane as f32 + 0.5) * LANE
 }
 fn landing_y(board: &Board, lane: usize) -> f32 {
-    platform_y(board, lane) + 45.0 + board.stack(lane).map_or(0, <[Ball]>::len) as f32 * 90.0
+    platform_y(board, lane)
+        + ROW_HEIGHT / 2.0
+        + board.stack(lane).map_or(0, <[Ball]>::len) as f32 * ROW_HEIGHT
 }
 fn visible_steps(distance: u64) -> f32 {
     let remainder = (distance % LANE_COUNT as u64) as u32;
@@ -850,7 +860,7 @@ fn visible_steps(distance: u64) -> f32 {
 }
 fn transit_position(transit: &Transit, board: &Board, offset: usize) -> Vec2 {
     let t = (transit.elapsed / transit.duration).clamp(0.0, 1.0);
-    let target = landing_y(board, transit.destination) - offset as f32 * 90.0;
+    let target = landing_y(board, transit.destination) - offset as f32 * ROW_HEIGHT;
     match transit.path {
         Path::Drop => Vec2::new(
             lane_x(transit.destination),
@@ -867,7 +877,7 @@ fn transit_position(transit: &Transit, board: &Board, offset: usize) -> Vec2 {
             let x = LEFT
                 + (lane_x(origin) - LEFT + direction * steps * LANE * t)
                     .rem_euclid(LANE * LANE_COUNT as f32);
-            let from = start_y - offset as f32 * 90.0;
+            let from = start_y - offset as f32 * ROW_HEIGHT;
             Vec2::new(
                 x,
                 from + (target - from) * t + 4.0 * (180.0 + steps * 6.0) * t * (1.0 - t),
@@ -922,8 +932,9 @@ fn apply_outcome(
             weight = flight.ball.weight,
             "Ball launched"
         );
-        let start_y =
-            320.0 - flight.origin_capacity as f32 * 90.0 + 45.0 + flight.origin_index as f32 * 90.0;
+        let start_y = 320.0 - flight.origin_capacity as f32 * ROW_HEIGHT
+            + ROW_HEIGHT / 2.0
+            + flight.origin_index as f32 * ROW_HEIGHT;
         let duration = 0.9 + visible_steps(flight.distance) * 0.04;
         motion.queued.push_back(Transit {
             ball: flight.ball,
@@ -1114,56 +1125,22 @@ fn draw_motion(
         cache.1 = scale;
         for (id, active) in motion.transits() {
             let position = transit_position(active, &field.board, field.offset);
-            let radius = (20.0 * scale).clamp(22.0, 40.0);
-            let mut parts = Vec::new();
-            for (sector, id) in active.ball.colors.iter().enumerate() {
-                let count = active.ball.colors.count();
-                let mesh = if count == 1 {
-                    meshes.add(Circle::new(radius))
-                } else {
-                    meshes.add(CircularSector::new(
-                        radius,
-                        std::f32::consts::PI / count as f32,
-                    ))
-                };
-                parts.push((
-                    mesh,
-                    materials.add(color(id)),
-                    sector as f32 * std::f32::consts::TAU / count as f32,
-                ));
-            }
+            let radius = ball_visual::radius(scale);
+            let visual = ball_visual::build(&active.ball, &mut meshes, &mut materials, scale);
             commands
                 .spawn((
                     TransitVisual { target: false, id },
                     Transform::from_xyz(position.x, position.y, 40.0),
                     Visibility::default(),
                 ))
-                .with_children(|children| {
-                    for (mesh, material, angle) in parts {
-                        children.spawn((
-                            Mesh2d(mesh),
-                            MeshMaterial2d(material),
-                            Transform::from_rotation(Quat::from_rotation_z(angle)),
-                        ));
-                    }
-                    children.spawn((
-                        Text2d::new(active.ball.weight.to_string()),
-                        TextFont {
-                            font_size: bevy::text::FontSize::Px((14.0 * scale).max(20.0)),
-                            ..default()
-                        },
-                        TextLayout::justify(Justify::Center),
-                        TextColor(Color::BLACK),
-                        Transform::from_xyz(0.0, 0.0, 1.0),
-                    ));
-                });
+                .with_children(|children| ball_visual::spawn(children, visual));
             commands.spawn((
                 TransitVisual { target: true, id },
                 Mesh2d(meshes.add(Annulus::new(radius + 4.0, radius + 8.0))),
                 MeshMaterial2d(materials.add(Color::srgb(0.95, 0.75, 0.3))),
                 Transform::from_xyz(
                     lane_x(active.destination),
-                    landing_y(&field.board, active.destination) - field.offset as f32 * 90.0,
+                    landing_y(&field.board, active.destination) - field.offset as f32 * ROW_HEIGHT,
                     35.0,
                 ),
             ));
@@ -1175,7 +1152,8 @@ fn draw_motion(
                 let at = if visual.target {
                     Vec2::new(
                         lane_x(active.destination),
-                        landing_y(&field.board, active.destination) - field.offset as f32 * 90.0,
+                        landing_y(&field.board, active.destination)
+                            - field.offset as f32 * ROW_HEIGHT,
                     )
                 } else {
                     position
@@ -1286,8 +1264,8 @@ mod tests {
     #[test]
     fn platform_endpoints_change_one_row_and_share_one_ceiling() {
         let mut board = Board::default();
-        assert_eq!(platform_y(&board, 0), -400.0);
-        assert_eq!(platform_y(&board, 1), -400.0);
+        assert_eq!(platform_y(&board, 0), 320.0 - 8.0 * ROW_HEIGHT);
+        assert_eq!(platform_y(&board, 1), 320.0 - 8.0 * ROW_HEIGHT);
         board.place(
             0,
             Ball {
@@ -1295,11 +1273,11 @@ mod tests {
                 colors: BallColors::single(ColorId::RED),
             },
         );
-        assert_eq!(platform_y(&board, 0), -490.0);
-        assert_eq!(platform_y(&board, 1), -310.0);
+        assert_eq!(platform_y(&board, 0), 320.0 - 9.0 * ROW_HEIGHT);
+        assert_eq!(platform_y(&board, 1), 320.0 - 7.0 * ROW_HEIGHT);
         for lane in 0..LANE_COUNT {
             assert_eq!(
-                platform_y(&board, lane) + board.capacity(lane).unwrap_or(0) as f32 * 90.0,
+                platform_y(&board, lane) + board.capacity(lane).unwrap_or(0) as f32 * ROW_HEIGHT,
                 320.0
             );
         }
@@ -2164,5 +2142,113 @@ mod tests {
             assert!(app.world().resource::<Motion>().active.is_none());
             assert!(app.world().resource::<Motion>().queued.is_empty());
         }
+    }
+    #[test]
+    fn static_and_moving_joker_paths_spawn_identical_sector_cues_and_weight_only() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, _) = input_app();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<ColorMaterial>>();
+        let colors = BallColors::new(&[ColorId::new(0), ColorId::new(6), ColorId::new(11)])
+            .unwrap_or_else(|| panic!("fixture colors"));
+        let ball = Ball { weight: 12, colors };
+        let stationary = ball.clone();
+        app.world_mut()
+            .run_system_once(
+                move |mut commands: Commands,
+                      mut meshes: ResMut<Assets<Mesh>>,
+                      mut materials: ResMut<Assets<ColorMaterial>>| {
+                    draw_ball(
+                        &mut commands,
+                        &mut meshes,
+                        &mut materials,
+                        &stationary,
+                        Vec2::ZERO,
+                        2.4,
+                        Some(Cell { lane: 0, index: 0 }),
+                    );
+                },
+            )
+            .unwrap_or_else(|error| panic!("static drawing {error:?}"));
+        app.world_mut().resource_mut::<Motion>().start(Transit {
+            ball,
+            destination: 0,
+            path: Path::Drop,
+            elapsed: 0.0,
+            duration: 1.0 / 6.0,
+        });
+        app.world_mut()
+            .run_system_once(draw_motion)
+            .unwrap_or_else(|error| panic!("moving drawing {error:?}"));
+        let world = app.world_mut();
+        let mut query = world.query::<(&ball_visual::Marking, &ChildOf)>();
+        let rows = query
+            .iter(world)
+            .map(|(mark, parent)| (mark.clone(), parent.parent()))
+            .collect::<Vec<_>>();
+        let mut static_marks = Vec::new();
+        let mut moving_marks = Vec::new();
+        for (mark, parent) in rows {
+            if world.entity(parent).contains::<Scene>() {
+                static_marks.push(mark);
+            } else if world.entity(parent).contains::<TransitVisual>() {
+                moving_marks.push(mark);
+            }
+        }
+        static_marks.sort_by_key(|mark| mark.sector);
+        moving_marks.sort_by_key(|mark| mark.sector);
+        assert_eq!(static_marks.len(), 3);
+        assert_eq!(static_marks, moving_marks);
+        assert_eq!(
+            static_marks
+                .iter()
+                .map(|mark| mark.id.index())
+                .collect::<Vec<_>>(),
+            vec![0, 6, 11]
+        );
+        let mut text = world.query::<&Text2d>();
+        assert!(text.iter(world).all(|text| text.0 == "12"));
+    }
+    #[test]
+    fn palette_demo_covers_twelve_ids_two_digit_weights_and_owned_jokers() {
+        let field = palette_demo().unwrap_or_else(|error| panic!("fixture {error:?}"));
+        assert_eq!(field.config.level.get(), 12);
+        assert_eq!(field.supply.held().weight, 12);
+        let mut ids = std::collections::BTreeSet::new();
+        ids.extend(field.supply.held().colors.iter().map(ColorId::index));
+        for lane in 0..LANE_COUNT {
+            for ball in field
+                .supply
+                .previews(lane)
+                .unwrap_or_else(|| panic!("lane"))
+            {
+                ids.extend(ball.colors.iter().map(ColorId::index));
+            }
+        }
+        assert_eq!(ids, (0..12).collect());
+        assert_eq!(
+            field
+                .board
+                .stack(6)
+                .and_then(|stack| stack.first())
+                .map(|ball| ball.weight),
+            Some(125)
+        );
+        assert_eq!(
+            field
+                .board
+                .stack(2)
+                .and_then(|stack| stack.first())
+                .map(|ball| ball.colors.count()),
+            Some(2)
+        );
+        assert_eq!(
+            field
+                .board
+                .stack(4)
+                .and_then(|stack| stack.first())
+                .map(|ball| ball.colors.count()),
+            Some(3)
+        );
     }
 }
