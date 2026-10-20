@@ -74,14 +74,8 @@ impl Playfield {
             error: None,
         })
     }
-    fn drop_ball(&mut self, motion: &mut Motion, clearing: &Clearing) -> Result<(), &'static str> {
-        if self.game_over
-            || self.error.is_some()
-            || (clearing.pending.is_empty()
-                && (motion.active.is_some()
-                    || !motion.queued.is_empty()
-                    || !motion.incoming.is_empty()))
-        {
+    fn drop_ball(&mut self, motion: &mut Motion) -> Result<(), &'static str> {
+        if self.game_over || self.error.is_some() {
             return Ok(());
         }
         let destination = self.chute.lane();
@@ -186,6 +180,27 @@ fn puzzle_demo() -> Result<Playfield, GenerationError> {
     }
     Ok(field)
 }
+// Deterministic edge-crossing scenes for renderer/input review; no automatic throw.
+fn wrap_demo(rightward: bool) -> Result<Playfield, GenerationError> {
+    let mut field = Playfield::new(
+        NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
+        Random::seeded(),
+    )?;
+    let mut prefix = [1, 1, 99].into_iter();
+    field.supply = Supply::new(field.config, &mut || prefix.next().unwrap_or(u64::MAX))?;
+    let (origin, arrival) = if rightward { (6, 7) } else { (1, 0) };
+    field.board.place(
+        origin,
+        Ball {
+            weight: 1,
+            colors: BallColors::single(ColorId::RED),
+        },
+    );
+    for _ in 0..arrival {
+        field.chute.shift(1);
+    }
+    Ok(field)
+}
 impl Default for Playfield {
     fn default() -> Self {
         match Self::new(NonZeroU32::MIN, Random::seeded()) {
@@ -224,7 +239,11 @@ pub fn run() {
             return;
         }
     };
-    let field = match if args.iter().any(|arg| arg == "--puzzle-demo") {
+    let field = match if args.iter().any(|arg| arg == "--wrap-left-demo") {
+        wrap_demo(false)
+    } else if args.iter().any(|arg| arg == "--wrap-right-demo") {
+        wrap_demo(true)
+    } else if args.iter().any(|arg| arg == "--puzzle-demo") {
         puzzle_demo()
     } else if args.iter().any(|arg| arg == "--flight-demo") {
         flight_demo()
@@ -522,6 +541,15 @@ fn redraw(
             Color::srgb(0.1, 0.18, 0.25),
             0.0,
         );
+        label(
+            &mut commands,
+            field.board.total(lane).to_string(),
+            x,
+            -570.0,
+            20.0,
+            scale,
+            INK,
+        );
         let base = platform_y(&field.board, lane);
         rect(&mut commands, x, base, 80.0, 12.0, INK, 0.0);
         for (index, ball) in field
@@ -742,7 +770,7 @@ fn input(
         field.reset();
         motion.clear();
         *clearing = Clearing::default();
-    } else if drop_requested && let Err(error) = field.drop_ball(&mut motion, &clearing) {
+    } else if drop_requested && let Err(error) = field.drop_ball(&mut motion) {
         error!(event = "drop_failed", error, "Drop rejected");
         field.error = Some(error);
     }
@@ -1445,9 +1473,14 @@ mod tests {
             .map(|lane| field.board.total(lane))
             .sum::<u64>()
             + motion
-                .active
-                .as_ref()
-                .map_or(0, |t| u64::from(t.ball.weight))
+                .transits()
+                .map(|(_, t)| u64::from(t.ball.weight))
+                .sum::<u64>()
+            + motion
+                .queued
+                .iter()
+                .map(|t| u64::from(t.ball.weight))
+                .sum::<u64>()
     }
     #[test]
     fn two_launch_chain_is_serial_preserves_balls_and_refills_only_once() {
@@ -1465,7 +1498,7 @@ mod tests {
         key(&mut app, KeyCode::Space);
         let supply = app.world().resource::<Playfield>().supply.clone();
         let random = app.world().resource::<Playfield>().random.0;
-        key(&mut app, KeyCode::Enter);
+        // No further user throw: the reaction chain itself must not refill.
         assert_eq!(app.world().resource::<Playfield>().supply, supply);
         advance(&mut app);
         let first = app
@@ -1675,7 +1708,7 @@ mod tests {
         );
     }
     #[test]
-    fn queued_flights_block_drops_and_reset_discards_every_owned_transit() {
+    fn queued_flights_allow_user_drops_and_reset_discards_every_owned_transit() {
         let (mut app, _) = input_app();
         let supply = app.world().resource::<Playfield>().supply.clone();
         app.world_mut()
@@ -1688,8 +1721,15 @@ mod tests {
                 elapsed: 0.0,
                 duration: 0.5,
             });
-        key(&mut app, KeyCode::Space);
-        assert_eq!(app.world().resource::<Playfield>().supply, supply);
+        let previous_random = app.world().resource::<Playfield>().random.0;
+        key(&mut app, KeyCode::ArrowDown);
+        assert!(app.world().resource::<Motion>().active.is_some());
+        assert_eq!(app.world().resource::<Motion>().queued.len(), 1);
+        assert_ne!(
+            app.world().resource::<Playfield>().random.0,
+            previous_random
+        );
+        let _ = supply;
         key(&mut app, KeyCode::Backspace);
         assert!(app.world().resource::<Motion>().queued.is_empty());
         assert!(app.world().resource::<Motion>().active.is_none());
@@ -1991,5 +2031,138 @@ mod tests {
         assert_eq!(field.board.total(7), 1);
         assert!(app.world().resource::<Clearing>().pending.is_empty());
         assert!(app.world().resource::<Clearing>().deadline.is_none());
+    }
+    #[test]
+    fn four_immediate_down_presses_own_four_balls_before_any_landing() {
+        let (mut app, _) = input_app();
+        let held = app.world().resource::<Playfield>().supply.held().clone();
+        let previews = app
+            .world()
+            .resource::<Playfield>()
+            .supply
+            .previews(0)
+            .cloned()
+            .unwrap_or_else(|| panic!("lane"));
+        for _ in 0..4 {
+            key(&mut app, KeyCode::ArrowDown);
+        }
+        let motion = app.world().resource::<Motion>();
+        let balls = motion
+            .transits()
+            .map(|(_, transit)| transit.ball.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(balls.len(), 4);
+        assert_eq!(motion.incoming.len(), 3);
+        assert_eq!(balls[0], held);
+        assert_eq!(balls[1], previews[0]);
+        assert_eq!(balls[2], previews[1]);
+        assert_eq!(app.world().resource::<Playfield>().board, Board::default());
+        let total = mass(app.world().resource::<Playfield>(), motion);
+        step(&mut app, 0.17);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.board.stack(0), Some(balls.as_slice()));
+        assert_eq!(mass(field, app.world().resource::<Motion>()), total);
+        assert!(app.world().resource::<Motion>().incoming.is_empty());
+        assert!(app.world().resource::<Motion>().active.is_none());
+        key(&mut app, KeyCode::Backspace);
+        for _ in 0..4 {
+            key(&mut app, KeyCode::ArrowDown);
+        }
+        key(&mut app, KeyCode::Backspace);
+        advance(&mut app);
+        assert_eq!(app.world().resource::<Playfield>().board, Board::default());
+        assert!(app.world().resource::<Motion>().incoming.is_empty());
+    }
+    #[test]
+    fn real_drop_animates_crosses_and_lands_both_board_edges() {
+        for rightward in [false, true] {
+            let (mut app, _) = input_app();
+            *app.world_mut().resource_mut::<Playfield>() =
+                wrap_demo(rightward).unwrap_or_else(|e| panic!("fixture {e:?}"));
+            let supply_before = app.world().resource::<Playfield>().supply.clone();
+            key(&mut app, KeyCode::ArrowDown);
+            assert_ne!(app.world().resource::<Playfield>().supply, supply_before);
+            step(&mut app, 0.17);
+            let transit = app
+                .world()
+                .resource::<Motion>()
+                .active
+                .clone()
+                .unwrap_or_else(|| panic!("emitted ball"));
+            let (origin, destination) = if rightward { (6, 0) } else { (1, 7) };
+            assert_eq!(transit.destination, destination);
+            assert!(
+                matches!(transit.path,Path::Launch{origin:actual,distance:2,rightward:direction,..} if actual==origin&&direction==rightward)
+            );
+            let supply = app.world().resource::<Playfield>().supply.clone();
+            let mut early = transit.clone();
+            early.elapsed = early.duration * 0.7;
+            let mut late = transit.clone();
+            late.elapsed = late.duration * 0.9;
+            let a = transit_position(&early, &app.world().resource::<Playfield>().board, 0).x;
+            let b = transit_position(&late, &app.world().resource::<Playfield>().board, 0).x;
+            if rightward {
+                assert!(a > 350.0 && b < -350.0);
+            } else {
+                assert!(a < -350.0 && b > 350.0);
+            }
+            step(&mut app, 0.8);
+            assert!(app.world().resource::<Motion>().active.is_some());
+            step(&mut app, 0.2);
+            let field = app.world().resource::<Playfield>();
+            assert_eq!(field.board.stack(destination), Some([ball(1)].as_slice()));
+            assert_eq!(field.board.total(if rightward { 7 } else { 0 }), 3);
+            assert_eq!(mass(field, app.world().resource::<Motion>()), 4);
+            assert_eq!(field.supply, supply);
+            assert!(app.world().resource::<Motion>().active.is_none());
+            assert!(app.world().resource::<Motion>().incoming.is_empty());
+        }
+    }
+    #[test]
+    fn burst_throws_during_an_edge_flight_preserve_every_ball_and_refill_order() {
+        for rightward in [false, true] {
+            let (mut app, _) = input_app();
+            *app.world_mut().resource_mut::<Playfield>() =
+                wrap_demo(rightward).unwrap_or_else(|e| panic!("fixture {e:?}"));
+            key(&mut app, KeyCode::ArrowDown);
+            step(&mut app, 0.17);
+            assert!(matches!(
+                app.world()
+                    .resource::<Motion>()
+                    .active
+                    .as_ref()
+                    .map(|t| &t.path),
+                Some(Path::Launch { distance: 2, .. })
+            ));
+            for _ in 0..4 {
+                key(&mut app, KeyCode::ArrowDown);
+            }
+            assert_eq!(app.world().resource::<Motion>().incoming.len(), 4);
+            let total = mass(
+                app.world().resource::<Playfield>(),
+                app.world().resource::<Motion>(),
+            );
+            let supply = app.world().resource::<Playfield>().supply.clone();
+            step(&mut app, 0.17);
+            assert_eq!(
+                mass(
+                    app.world().resource::<Playfield>(),
+                    app.world().resource::<Motion>()
+                ),
+                total
+            );
+            assert!(app.world().resource::<Motion>().incoming.is_empty());
+            assert!(app.world().resource::<Motion>().active.is_some());
+            step(&mut app, 1.0);
+            let field = app.world().resource::<Playfield>();
+            assert_eq!(mass(field, app.world().resource::<Motion>()), total);
+            assert_eq!(field.supply, supply);
+            assert_eq!(
+                field.board.stack(if rightward { 0 } else { 7 }),
+                Some([ball(1)].as_slice())
+            );
+            assert!(app.world().resource::<Motion>().active.is_none());
+            assert!(app.world().resource::<Motion>().queued.is_empty());
+        }
     }
 }

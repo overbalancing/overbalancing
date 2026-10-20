@@ -1,6 +1,6 @@
 //! Transactional compression, joker cascades, scoring and seesaw reactions.
 use crate::{
-    Balance, Ball, BallColors, Board, LANE_COUNT, SEESAW_COUNT, matching,
+    Balance, Ball, Board, LANE_COUNT, SEESAW_COUNT, matching,
     scoring::{self, Progression, ScoreError},
 };
 
@@ -90,19 +90,15 @@ fn compress(board: &mut Board, pending: &mut PendingClear) -> Result<usize, Reso
     for (lane, stack) in board.stacks.iter_mut().enumerate() {
         let mut index = 0;
         while index + 5 <= stack.len() {
-            let common: Vec<_> = stack[index]
-                .colors
-                .iter()
-                .filter(|color| {
-                    stack[index + 1..index + 5]
-                        .iter()
-                        .all(|ball| ball.colors.contains(*color))
-                })
-                .collect();
-            let Some(colors) = BallColors::new(&common) else {
+            let colors = stack[index].colors.clone();
+            if colors.count() != 1
+                || !stack[index + 1..index + 5]
+                    .iter()
+                    .all(|ball| ball.colors == colors)
+            {
                 index += 1;
                 continue;
-            };
+            }
             let weight = stack[index..index + 5]
                 .iter()
                 .try_fold(0u32, |sum, ball| sum.checked_add(ball.weight))
@@ -264,7 +260,7 @@ pub fn land(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ColorId;
+    use crate::{BallColors, ColorId};
     use std::num::NonZeroU32;
     fn ball(weight: u32, ids: &[u32]) -> Ball {
         let colors: Vec<_> = ids.iter().copied().map(ColorId::new).collect();
@@ -288,6 +284,70 @@ mod tests {
         assert_eq!(pending.cells().len(), 4);
         (board, pending)
     }
+    #[test]
+    fn every_two_or_three_color_joker_position_breaks_compression() {
+        for joker_colors in [&[0, 1][..], &[0, 1, 2]] {
+            for joker_index in 0..5 {
+                let mut board = Board::default();
+                for index in 0..4 {
+                    assert!(board.place(
+                        0,
+                        ball(
+                            1,
+                            if index == joker_index {
+                                joker_colors
+                            } else {
+                                &[0]
+                            }
+                        )
+                    ));
+                }
+                let mut pending = PendingClear::default();
+                let Ok(outcome) = prepare_landing(
+                    &mut board,
+                    &mut pending,
+                    0,
+                    ball(1, if joker_index == 4 { joker_colors } else { &[0] }),
+                ) else {
+                    panic!("valid landing");
+                };
+                assert_eq!(outcome.compressed_count, 0);
+                assert_eq!(board.stack(0).map(<[Ball]>::len), Some(5));
+                assert_eq!(board.total(0), 5);
+                assert!(pending.is_empty());
+            }
+        }
+        let mut board = Board::default();
+        for _ in 0..4 {
+            assert!(board.place(0, ball(1, &[0, 1])));
+        }
+        let Ok(outcome) = land(&mut board, &mut progress(), 0, ball(1, &[0, 1])) else {
+            panic!("valid landing");
+        };
+        assert_eq!(outcome.compressed_count, 0);
+        assert_eq!(board.stack(0).map(<[Ball]>::len), Some(5));
+    }
+    #[test]
+    fn resolved_flights_wrap_outside_each_board_edge_in_both_directions() {
+        for (origin, landing, destination) in [(6, 7, 0), (1, 0, 7)] {
+            let mut board = Board::default();
+            let mut pending = PendingClear::default();
+            assert!(board.place(origin, ball(1, &[0])));
+            let Ok(outcome) = prepare_landing(&mut board, &mut pending, landing, ball(3, &[1]))
+            else {
+                panic!("strict flip");
+            };
+            assert_eq!(outcome.flights.len(), 1);
+            let flight = &outcome.flights[0];
+            assert_eq!(
+                (flight.origin, flight.destination, flight.distance),
+                (origin, destination, 2)
+            );
+            assert_eq!(flight.ball.weight, 1);
+            assert_eq!(weight(&board) + u64::from(flight.ball.weight), 4);
+        }
+    }
+
     #[test]
     fn marked_balls_stay_visible_scoreless_and_accept_followup_despite_new_tilt() {
         let (mut board, mut pending) = marked_four();
@@ -542,13 +602,13 @@ mod tests {
     }
 
     #[test]
-    fn five_compress_before_flight_and_preserve_mass_and_intersection() {
+    fn five_single_color_balls_compress_before_flight_and_preserve_mass() {
         let mut board = Board::default();
-        for ids in [&[0, 1][..], &[0, 2], &[0], &[0, 1, 2]] {
+        for ids in [&[0][..], &[0], &[0], &[0]] {
             assert!(board.place(0, ball(1, ids)));
         }
         let mut progression = progress();
-        let Ok(outcome) = land(&mut board, &mut progression, 0, ball(1, &[0, 2])) else {
+        let Ok(outcome) = land(&mut board, &mut progression, 0, ball(1, &[0])) else {
             panic!("valid resolution");
         };
         assert_eq!(outcome.compressed_count, 1);
