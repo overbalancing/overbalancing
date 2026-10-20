@@ -4,6 +4,8 @@ use overpalancing_core::supply::{GenerationError, GeneratorConfig, Supply};
 use overpalancing_core::{
     Balance, Ball, BallColors, Board, ColorId, Dispenser, LANE_COUNT, SEESAW_COUNT,
 };
+use overpalancing_core::{resolution, scoring::Progression};
+use std::collections::VecDeque;
 use std::{
     num::NonZeroU32,
     sync::atomic::{AtomicU64, Ordering},
@@ -43,6 +45,10 @@ struct Playfield {
     supply: Supply,
     offset: usize,
     config: GeneratorConfig,
+    progression: Progression,
+    initial_level: NonZeroU32,
+    feedback: Option<String>,
+    feedback_until: f64,
     random: Random,
     game_over: bool,
     busy: bool,
@@ -58,6 +64,10 @@ impl Playfield {
             supply,
             offset: 0,
             config,
+            progression: Progression::new(level),
+            initial_level: level,
+            feedback: None,
+            feedback_until: 0.0,
             random,
             game_over: false,
             busy: false,
@@ -65,7 +75,11 @@ impl Playfield {
         })
     }
     fn drop_ball(&mut self, motion: &mut Motion) -> Result<(), &'static str> {
-        if self.game_over || motion.active.is_some() {
+        if self.game_over
+            || self.error.is_some()
+            || motion.active.is_some()
+            || !motion.queued.is_empty()
+        {
             return Ok(());
         }
         let destination = self.chute.lane();
@@ -92,7 +106,12 @@ impl Playfield {
         Ok(())
     }
     fn reset(&mut self) {
-        if let Ok(supply) = Supply::new(self.config, &mut || self.random.next()) {
+        let mut config = self.config;
+        config.level = self.initial_level;
+        if let Ok(supply) = Supply::new(config, &mut || self.random.next()) {
+            self.config = config;
+            self.progression = Progression::new(self.initial_level);
+            self.feedback = None;
             self.supply = supply;
             self.board.clear();
             self.offset = 0;
@@ -122,6 +141,36 @@ fn flight_demo() -> Result<Playfield, GenerationError> {
         }
     }
     field.chute.shift(1);
+    Ok(field)
+}
+// Explicit review fixture: one drop compresses five yellow balls and clears a joker bridge.
+fn puzzle_demo() -> Result<Playfield, GenerationError> {
+    let mut field = Playfield::new(
+        NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
+        Random::seeded(),
+    )?;
+    let mut prefix = [0, 2, 99].into_iter();
+    field.supply = Supply::new(field.config, &mut || prefix.next().unwrap_or(u64::MAX))?;
+    for (lane, ids) in [vec![0], vec![0], vec![0, 1], vec![1], vec![1, 2], vec![2]]
+        .into_iter()
+        .enumerate()
+    {
+        let colors = BallColors::new(&ids.into_iter().map(ColorId::new).collect::<Vec<_>>())
+            .unwrap_or_else(|| panic!("fixture colors"));
+        field.board.place(lane, Ball { weight: 1, colors });
+    }
+    for _ in 0..4 {
+        field.board.place(
+            6,
+            Ball {
+                weight: 1,
+                colors: BallColors::single(ColorId::YELLOW),
+            },
+        );
+    }
+    for _ in 0..6 {
+        field.chute.shift(1);
+    }
     Ok(field)
 }
 impl Default for Playfield {
@@ -162,7 +211,9 @@ pub fn run() {
             return;
         }
     };
-    let field = match if args.iter().any(|arg| arg == "--flight-demo") {
+    let field = match if args.iter().any(|arg| arg == "--puzzle-demo") {
+        puzzle_demo()
+    } else if args.iter().any(|arg| arg == "--flight-demo") {
         flight_demo()
     } else {
         Playfield::new(level, Random::seeded())
@@ -386,7 +437,11 @@ fn redraw(
     }
     label(
         &mut commands,
-        format!("OVERPALANCING | LEVEL {}", field.config.level),
+        format!(
+            "Level {} | Score {}",
+            field.progression.level(),
+            field.progression.score()
+        ),
         0.0,
         1000.0,
         30.0,
@@ -395,7 +450,7 @@ fn redraw(
     );
     label(
         &mut commands,
-        "Color IDs / weight | 2 previews per lane",
+        format!("Next level: {} points", field.progression.remaining()),
         0.0,
         940.0,
         20.0,
@@ -533,6 +588,9 @@ fn redraw(
         scale,
         INK,
     );
+    if let Some(feedback) = &field.feedback {
+        label(&mut commands, feedback, 0.0, 350.0, 18.0, scale, INK);
+    }
     for seesaw in 0..SEESAW_COUNT {
         let left_x = LEFT + (seesaw * 2) as f32 * LANE + LANE / 2.0;
         let a = Vec2::new(left_x, platform_y(&field.board, seesaw * 2));
@@ -769,6 +827,7 @@ struct Transit {
 #[derive(Resource, Default)]
 struct Motion {
     active: Option<Transit>,
+    queued: VecDeque<Transit>,
     revision: u64,
 }
 impl Motion {
@@ -777,6 +836,7 @@ impl Motion {
         self.revision = self.revision.wrapping_add(1);
     }
     fn clear(&mut self) {
+        self.queued.clear();
         self.active = None;
         self.revision = self.revision.wrapping_add(1);
     }
@@ -829,7 +889,10 @@ fn transit_position(transit: &Transit, board: &Board, offset: usize) -> Vec2 {
     }
 }
 fn animate(time: Res<Time>, mut field: ResMut<Playfield>, mut motion: ResMut<Motion>) {
-    if field.game_over {
+    if field.feedback.is_some() && time.elapsed_secs_f64() >= field.feedback_until {
+        field.feedback = None;
+    }
+    if field.game_over || field.error.is_some() {
         return;
     }
     let Some(active) = motion.active.as_mut() else {
@@ -842,13 +905,36 @@ fn animate(time: Res<Time>, mut field: ResMut<Playfield>, mut motion: ResMut<Mot
     let Some(landed) = motion.active.take() else {
         return;
     };
-    match field.board.land(landed.destination, landed.ball.clone()) {
-        Ok(reaction) => {
-            field.game_over = field.board.is_game_over();
-            if let Some(flight) = reaction {
-                let start_y = landing_y(&field.board, flight.origin);
+    let outcome = {
+        let Playfield {
+            board, progression, ..
+        } = &mut *field;
+        resolution::land(board, progression, landed.destination, landed.ball.clone())
+    };
+    match outcome {
+        Ok(outcome) => {
+            field.game_over = outcome.game_over;
+            let previous = field.config.level;
+            field.config.level = field.progression.level();
+            if outcome.points > 0 || outcome.compressed_count > 0 || previous != field.config.level
+            {
+                let level_notice = if previous != field.config.level {
+                    format!(" | Level {}", field.config.level)
+                } else {
+                    String::new()
+                };
+                field.feedback = Some(format!(
+                    "5->1 x{} | Cleared {} | +{}{}",
+                    outcome.compressed_count, outcome.cleared_count, outcome.points, level_notice
+                ));
+                field.feedback_until = time.elapsed_secs_f64() + 3.0;
+            }
+            for flight in outcome.flights {
+                let start_y = 320.0 - flight.origin_capacity as f32 * 90.0
+                    + 45.0
+                    + flight.origin_index as f32 * 90.0;
                 let duration = 0.9 + visible_steps(flight.distance) * 0.04;
-                motion.start(Transit {
+                motion.queued.push_back(Transit {
                     ball: flight.ball,
                     destination: flight.destination,
                     path: Path::Launch {
@@ -860,6 +946,9 @@ fn animate(time: Res<Time>, mut field: ResMut<Playfield>, mut motion: ResMut<Mot
                     elapsed: 0.0,
                     duration,
                 });
+            }
+            if let Some(next) = motion.queued.pop_front() {
+                motion.start(next);
                 field.busy = true;
             } else {
                 motion.clear();
@@ -867,9 +956,9 @@ fn animate(time: Res<Time>, mut field: ResMut<Playfield>, mut motion: ResMut<Mot
             }
         }
         Err(_) => {
-            field.error = Some("Unable to land this ball");
-            field.game_over = true;
+            field.error = Some("Resolution paused - reset to recover");
             motion.start(landed);
+            field.busy = true;
         }
     }
 }
@@ -961,7 +1050,11 @@ fn draw_motion(
             ));
             commands.spawn((
                 TransitStatus,
-                Text2d::new(transit_status(active, field.game_over)),
+                Text2d::new(format!(
+                    "{} | Queue {}",
+                    transit_status(active, field.game_over || field.error.is_some()),
+                    motion.queued.len()
+                )),
                 TextFont {
                     font_size: bevy::text::FontSize::Px((14.0 * scale).max(20.0)),
                     ..default()
@@ -985,7 +1078,11 @@ fn draw_motion(
             transform.translation.y = at.y;
         }
         for (_, mut text) in &mut statuses {
-            text.0 = transit_status(active, field.game_over);
+            text.0 = format!(
+                "{} | Queue {}",
+                transit_status(active, field.game_over || field.error.is_some()),
+                motion.queued.len()
+            );
         }
     }
 }
@@ -1253,12 +1350,12 @@ mod tests {
         {
             let mut field = app.world_mut().resource_mut::<Playfield>();
             for lane in 0..2 {
-                for _ in 0..8 {
+                for row in 0..8 {
                     field.board.place(
                         lane,
                         Ball {
                             weight: 1,
-                            colors: BallColors::single(ColorId::RED),
+                            colors: BallColors::single(ColorId::new((row % 2) as u32)),
                         },
                     );
                 }
@@ -1390,8 +1487,14 @@ mod tests {
         assert_eq!(app.world().resource::<Playfield>().board, Board::default());
         {
             let mut field = app.world_mut().resource_mut::<Playfield>();
-            for _ in 0..9 {
-                field.board.place(0, ball(1));
+            for row in 0..9 {
+                field.board.place(
+                    0,
+                    Ball {
+                        weight: 1,
+                        colors: BallColors::single(ColorId::new((row % 2) as u32)),
+                    },
+                );
             }
             field.board.place(1, ball(8));
             field.busy = true;
@@ -1457,5 +1560,222 @@ mod tests {
         assert_eq!(app.world().resource::<Playfield>().supply, supply);
         key(&mut app, KeyCode::Backspace);
         assert_eq!(app.world().resource::<Playfield>().board, Board::default());
+    }
+    fn level_one_app() -> App {
+        let (mut app, _) = input_app();
+        *app.world_mut().resource_mut::<Playfield>() =
+            Playfield::new(NonZeroU32::MIN, Random(31)).unwrap_or_else(|e| panic!("fixture {e:?}"));
+        app
+    }
+    #[test]
+    fn actual_keypresses_clear_triples_and_continue_into_level_two() {
+        let mut app = level_one_app();
+        for group in 0..4 {
+            for _ in 0..3 {
+                key(&mut app, KeyCode::ArrowLeft);
+            }
+            for lane in 0..3 {
+                if lane > 0 {
+                    key(&mut app, KeyCode::ArrowRight);
+                }
+                key(&mut app, KeyCode::Space);
+                advance(&mut app);
+            }
+            let field = app.world().resource::<Playfield>();
+            assert_eq!(field.progression.score(), (group + 1) * 300);
+            assert_eq!(field.board, Board::default());
+        }
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.progression.level().get(), 2);
+        assert_eq!(field.progression.remaining(), 1800);
+        assert_eq!(field.config.level.get(), 2);
+        assert_eq!(field.supply.held(), &ball(1));
+        for lane in 0..LANE_COUNT {
+            assert_eq!(field.supply.previews(lane), Some(&[ball(1), ball(1)]));
+        }
+        let mut random = field.random;
+        let expected = field
+            .config
+            .generate(&mut || random.next())
+            .unwrap_or_else(|e| panic!("generation {e:?}"));
+        for _ in 0..3 {
+            key(&mut app, KeyCode::ArrowLeft);
+        }
+        key(&mut app, KeyCode::Space);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.supply.previews(0).map(|p| &p[1]), Some(&expected));
+        assert!((1..=2).contains(&expected.weight));
+        assert!(expected.colors.iter().all(|color| color.index() < 2));
+        assert_eq!(field.progression.score(), 1200);
+    }
+    #[test]
+    fn five_real_drops_compress_to_five_without_scoring() {
+        let mut app = level_one_app();
+        for _ in 0..5 {
+            key(&mut app, KeyCode::Space);
+            advance(&mut app);
+        }
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.board.stack(0), Some([ball(5)].as_slice()));
+        assert_eq!(field.progression.score(), 0);
+        assert!(
+            field
+                .feedback
+                .as_ref()
+                .is_some_and(|text| text.contains("5->1 x1"))
+        );
+    }
+    #[test]
+    fn queued_flights_block_drops_and_reset_discards_every_owned_transit() {
+        let (mut app, _) = input_app();
+        let supply = app.world().resource::<Playfield>().supply.clone();
+        app.world_mut()
+            .resource_mut::<Motion>()
+            .queued
+            .push_back(Transit {
+                ball: ball(2),
+                destination: 0,
+                path: Path::Drop,
+                elapsed: 0.0,
+                duration: 0.5,
+            });
+        key(&mut app, KeyCode::Space);
+        assert_eq!(app.world().resource::<Playfield>().supply, supply);
+        key(&mut app, KeyCode::Backspace);
+        assert!(app.world().resource::<Motion>().queued.is_empty());
+        assert!(app.world().resource::<Motion>().active.is_none());
+    }
+    #[test]
+    fn puzzle_demo_compresses_then_clears_joker_bridge_for_six_hundred() {
+        let (mut app, _) = input_app();
+        *app.world_mut().resource_mut::<Playfield>() =
+            puzzle_demo().unwrap_or_else(|e| panic!("fixture {e:?}"));
+        assert_eq!(app.world().resource::<Playfield>().supply.held().weight, 2);
+        key(&mut app, KeyCode::Space);
+        advance(&mut app);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.progression.score(), 600);
+        assert_eq!(
+            field.board.stack(6),
+            Some(
+                [Ball {
+                    weight: 6,
+                    colors: BallColors::single(ColorId::YELLOW)
+                }]
+                .as_slice()
+            )
+        );
+        assert!((0..6).all(|lane| field.board.total(lane) == 0));
+        assert!(
+            field
+                .feedback
+                .as_ref()
+                .is_some_and(|text| text.contains("5->1 x1 | Cleared 6 | +600"))
+        );
+        assert!(!field.game_over);
+    }
+    #[test]
+    fn resolution_errors_preserve_board_score_and_every_in_transit_ball() {
+        let (mut app, _) = input_app();
+        {
+            let mut field = app.world_mut().resource_mut::<Playfield>();
+            for _ in 0..4 {
+                field.board.place(0, ball(u32::MAX));
+            }
+            field.busy = true;
+        }
+        let before = app.world().resource::<Playfield>().board.clone();
+        let progression = app.world().resource::<Playfield>().progression.clone();
+        app.world_mut().resource_mut::<Motion>().start(Transit {
+            ball: ball(u32::MAX),
+            destination: 0,
+            path: Path::Drop,
+            elapsed: 0.0,
+            duration: 0.5,
+        });
+        advance(&mut app);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.board, before);
+        assert_eq!(field.progression, progression);
+        assert!(field.error.is_some());
+        assert!(!field.game_over);
+        assert_eq!(
+            app.world()
+                .resource::<Motion>()
+                .active
+                .as_ref()
+                .map(|t| t.ball.weight),
+            Some(u32::MAX)
+        );
+        let supply = field.supply.clone();
+        key(&mut app, KeyCode::Space);
+        assert_eq!(app.world().resource::<Playfield>().supply, supply);
+        key(&mut app, KeyCode::Backspace);
+        assert!(app.world().resource::<Playfield>().error.is_none());
+        assert!(app.world().resource::<Motion>().active.is_none());
+    }
+    #[test]
+    fn newly_emitted_flights_join_after_existing_owned_queue_in_core_order() {
+        let (mut app, _) = input_app();
+        {
+            let mut field = app.world_mut().resource_mut::<Playfield>();
+            for (left, id) in [(0, 10), (2, 20)] {
+                for (weight, color) in [(1, id), (1, id), (5, 0)] {
+                    field.board.place(
+                        left,
+                        Ball {
+                            weight,
+                            colors: BallColors::single(ColorId::new(color)),
+                        },
+                    );
+                }
+                for (weight, color) in [(1, 0), (5, id + 1)] {
+                    field.board.place(
+                        left + 1,
+                        Ball {
+                            weight,
+                            colors: BallColors::single(ColorId::new(color)),
+                        },
+                    );
+                }
+            }
+            field.busy = true;
+        }
+        {
+            let mut motion = app.world_mut().resource_mut::<Motion>();
+            motion.start(Transit {
+                ball: Ball {
+                    weight: 1,
+                    colors: BallColors::single(ColorId::new(99)),
+                },
+                destination: 7,
+                path: Path::Drop,
+                elapsed: 0.0,
+                duration: 0.5,
+            });
+            motion.queued.push_back(Transit {
+                ball: ball(42),
+                destination: 6,
+                path: Path::Drop,
+                elapsed: 0.0,
+                duration: 0.5,
+            });
+        }
+        advance(&mut app);
+        let motion = app.world().resource::<Motion>();
+        assert_eq!(motion.active.as_ref().map(|t| t.ball.weight), Some(42));
+        assert_eq!(motion.queued.len(), 2);
+        assert!(matches!(
+            motion.queued[0].path,
+            Path::Launch { origin: 0, .. }
+        ));
+        assert!(matches!(
+            motion.queued[1].path,
+            Path::Launch { origin: 2, .. }
+        ));
+        assert_eq!(
+            app.world().resource::<Playfield>().progression.score(),
+            1200
+        );
     }
 }

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+<title>Puzzle resolution · Overpalancing</title>
+</head>
+<body>
+<header><nav aria-label="Documentation"><a href="index.html">Overpalancing documentation</a> · <a href="flight-reactions.html">Flight reactions</a></nav></header>
+<main>
+<h1>Puzzle resolution and progression</h1>
+<p>This feature extends level supply and flight reactions with compression, connected color clearing, score and automatic level progression. It uses the existing primitive graphics and controls; no external asset or new dependency is required.</p>
+<h2>Resolution order</h2>
+<p>Resolve compression first, then clearing and score, then seesaw reactions and flights. Five vertically consecutive balls that share a common palette color compress into one ball. Its weight is the sum of the five weights; its colors are their common intersection, with at most three colors. Compression alone awards no clearing points.</p>
+<p>A qualifying horizontal run starts connected clearing through orthogonally adjacent matching colors. A multicolor joker can change color membership as the connection crosses it, joining differently colored portions of the cleared group. Count each removed ball once for score even when more than one route reaches it. Joker matching is a color-change connection, not an extra copy of the ball.</p>
+<h2>Score and level</h2>
+<p>The initial level is one. Advancing from level L requires an additional 1000 × L points; surplus carries into the next level's progress. Display the current level, accumulated score and points still needed so the player can distinguish lifetime score from the current target.</p>
+<p>Level changes affect newly generated balls only. Already held balls and visible previews keep their colors and weights. A level-up notice must not suggest those existing balls have changed. The command-line <code>--level 3</code> option remains useful for comparing higher-level supply and reactions.</p>
+<h2>Feedback and controls</h2>
+<p>Keep all sixteen preview balls and the held chute ball visible at 390-pixel portrait width. Use compact score and progress lines rather than shrinking essential text. Compression feedback should identify the resulting weight; clearing feedback should identify the removed count and awarded points. Text accompanies any flash or color effect.</p>
+<p>Use the established chute controls and explicit Drop action. A reaction chain keeps Drop busy until all resolution and flight work completes; Reset remains available by touch, pointer and Backspace. Status feedback must not hide these controls or the current held ball.</p>
+<h2>Verification status</h2>
+<p>On 2026-10-20, the UX engineer reviewed actual Vulkan/Xvfb renders of the puzzle fixture in landscape and at 390-pixel portrait width, plus normal-play progression and compression at 390 pixels. Visual review passed: level, score, remaining points, all sixteen previews, the held ball and Drop/Reset remain readable without overlap. Feedback distinguishes compression count, cleared-ball count and awarded points. The compressed weight is visible on the resulting ball and its side total.</p>
+<p>The lead's actual X11 play sequence cleared four groups of three balls for 300 points each, reaching level two at score 1200 with 1800 points remaining. Clearing uses the frozen pre-landing geometry before tilt; the earlier four-ball/400-point example does not describe this sequence. The compression render shows five weight-one balls becoming weight five with zero cleared balls and zero points. Existing visible previews remain unchanged after progression. Physical phone execution, other-platform runtime checks and customer acceptance remain pending.</p>
+<h2>Try the combined fixture</h2>
+<pre><code>cargo run --locked -p overpalancing-app --bin overpalancing -- --puzzle-demo</code></pre>
+<p>Press Space once. The fixture compresses one group, clears six connected balls through the joker bridge and awards 600 points; the remaining yellow ball has weight six. The inspected landscape feedback reads <code>5-&gt;1 x1 | Cleared 6 | +600</code>. Feedback is temporary, so a later settled screenshot may show only the resulting board and persistent score. Ordinary play still starts at level one; <code>--level 3</code> starts a higher-level comparison.</p>
+</main>
+</body>
+</html>

@@ -2,6 +2,9 @@
 #![forbid(unsafe_code)]
 
 pub mod flight;
+pub mod matching;
+pub mod resolution;
+pub mod scoring;
 pub mod supply;
 
 /// Number of seesaws in the game board.
