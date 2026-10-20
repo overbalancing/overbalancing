@@ -45,6 +45,7 @@ struct Playfield {
     config: GeneratorConfig,
     random: Random,
     game_over: bool,
+    busy: bool,
     error: Option<&'static str>,
 }
 impl Playfield {
@@ -59,14 +60,15 @@ impl Playfield {
             config,
             random,
             game_over: false,
+            busy: false,
             error: None,
         })
     }
-    fn drop_ball(&mut self) -> Result<(), &'static str> {
-        if self.game_over {
+    fn drop_ball(&mut self, motion: &mut Motion) -> Result<(), &'static str> {
+        if self.game_over || motion.active.is_some() {
             return Ok(());
         }
-        let source = self.chute.lane();
+        let destination = self.chute.lane();
         let mut random = self.random;
         let next = self
             .config
@@ -74,14 +76,16 @@ impl Playfield {
             .map_err(|_| "Unable to generate a ball")?;
         let mut supply = self.supply.clone();
         let held = supply
-            .take_and_refill(source, next)
+            .take_and_refill(destination, next)
             .map_err(|_| "Unable to refill this lane")?;
-        let mut board = self.board.clone();
-        if !board.place(source, held) {
-            return Err("Unable to place this ball");
-        }
-        self.game_over = board.is_game_over();
-        self.board = board;
+        motion.start(Transit {
+            ball: held,
+            destination,
+            path: Path::Drop,
+            elapsed: 0.0,
+            duration: 0.5,
+        });
+        self.busy = true;
         self.supply = supply;
         self.random = random;
         self.error = None;
@@ -94,9 +98,31 @@ impl Playfield {
             self.offset = 0;
             self.chute = Dispenser::default();
             self.game_over = false;
+            self.busy = false;
             self.error = None;
         }
     }
+}
+// Reproducible render-review setup; opt-in CLI only, not a gameplay level.
+fn flight_demo() -> Result<Playfield, GenerationError> {
+    let mut field = Playfield::new(
+        NonZeroU32::new(5).unwrap_or(NonZeroU32::MIN),
+        Random::seeded(),
+    )?;
+    field.supply = Supply::new(field.config, &mut || u64::MAX - 1)?;
+    for (lane, weights) in [(0, vec![1, 2]), (1, vec![2]), (4, vec![1]), (5, vec![2])] {
+        for weight in weights {
+            field.board.place(
+                lane,
+                Ball {
+                    weight,
+                    colors: BallColors::single(ColorId::RED),
+                },
+            );
+        }
+    }
+    field.chute.shift(1);
+    Ok(field)
 }
 impl Default for Playfield {
     fn default() -> Self {
@@ -136,7 +162,11 @@ pub fn run() {
             return;
         }
     };
-    let field = match Playfield::new(level, Random::seeded()) {
+    let field = match if args.iter().any(|arg| arg == "--flight-demo") {
+        flight_demo()
+    } else {
+        Playfield::new(level, Random::seeded())
+    } {
         Ok(field) => field,
         Err(error) => {
             eprintln!("Invalid level configuration: {error:?}");
@@ -154,6 +184,7 @@ pub fn run() {
                 .map(|p| p[1].clone()),
         })
         .insert_resource(field)
+        .init_resource::<Motion>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Overpalancing - level supply".into(),
@@ -169,7 +200,19 @@ pub fn run() {
         .add_systems(Startup, |mut commands: Commands| {
             commands.spawn((Camera2d, SceneCamera));
         })
-        .add_systems(Update, (pan, input, fit_camera, redraw, smoke_test).chain())
+        .add_systems(
+            Update,
+            (
+                pan,
+                input,
+                animate,
+                fit_camera,
+                redraw,
+                draw_motion,
+                smoke_test,
+            )
+                .chain(),
+        )
         .run();
 }
 fn view_scale(width: f32, height: f32) -> Option<f32> {
@@ -307,7 +350,7 @@ fn draw_ball(
         .iter()
         .map(|id| (u64::from(id.index()) + 1).to_string())
         .collect::<Vec<_>>()
-        .join("");
+        .join("+");
     label(
         commands,
         format!("{}\n{}", ids, ball.weight),
@@ -475,11 +518,15 @@ fn redraw(
     );
     label(
         &mut commands,
-        format!(
-            "Rows {}-{} | drag to inspect",
-            field.offset + 1,
-            field.offset + 9
-        ),
+        if field.busy {
+            String::new()
+        } else {
+            format!(
+                "Rows {}-{} | drag to inspect",
+                field.offset + 1,
+                field.offset + 9
+            )
+        },
         0.0,
         410.0,
         18.0,
@@ -546,7 +593,13 @@ fn redraw(
     );
     button(
         &mut commands,
-        if field.game_over { "STOPPED" } else { "DROP" },
+        if field.game_over {
+            "STOPPED"
+        } else if field.busy {
+            "BUSY"
+        } else {
+            "DROP"
+        },
         -210.0,
         -815.0,
         390.0,
@@ -567,7 +620,7 @@ fn redraw(
         commands.spawn((
             Scene,
             Sprite::from_color(Color::srgb(0.6, 0.05, 0.08), Vec2::new(780.0, 250.0)),
-            Transform::from_xyz(0.0, -30.0, 20.0),
+            Transform::from_xyz(0.0, -30.0, 90.0),
         ));
         commands.spawn((
             Scene,
@@ -578,7 +631,7 @@ fn redraw(
             },
             TextLayout::justify(Justify::Center),
             TextColor(Color::WHITE),
-            Transform::from_xyz(0.0, -30.0, 30.0),
+            Transform::from_xyz(0.0, -30.0, 100.0),
         ));
     } else if let Some(error) = field.error {
         label(
@@ -644,6 +697,7 @@ fn input(
     window: Single<&Window, With<PrimaryWindow>>,
     mut field: ResMut<Playfield>,
     mut ignore_mouse: Local<u8>,
+    mut motion: ResMut<Motion>,
 ) {
     let touch_activity =
         touches.iter().next().is_some() || touches.iter_just_released().next().is_some();
@@ -689,8 +743,268 @@ fn input(
     }
     if reset_requested {
         field.reset();
-    } else if drop_requested && let Err(error) = field.drop_ball() {
+        motion.clear();
+    } else if drop_requested && let Err(error) = field.drop_ball(&mut motion) {
         field.error = Some(error);
+    }
+}
+#[derive(Clone)]
+enum Path {
+    Drop,
+    Launch {
+        origin: usize,
+        distance: u64,
+        rightward: bool,
+        start_y: f32,
+    },
+}
+#[derive(Clone)]
+struct Transit {
+    ball: Ball,
+    destination: usize,
+    path: Path,
+    elapsed: f32,
+    duration: f32,
+}
+#[derive(Resource, Default)]
+struct Motion {
+    active: Option<Transit>,
+    revision: u64,
+}
+impl Motion {
+    fn start(&mut self, transit: Transit) {
+        self.active = Some(transit);
+        self.revision = self.revision.wrapping_add(1);
+    }
+    fn clear(&mut self) {
+        self.active = None;
+        self.revision = self.revision.wrapping_add(1);
+    }
+}
+#[derive(Component)]
+struct TransitVisual {
+    target: bool,
+}
+#[derive(Component)]
+struct TransitStatus;
+fn lane_x(lane: usize) -> f32 {
+    LEFT + (lane as f32 + 0.5) * LANE
+}
+fn landing_y(board: &Board, lane: usize) -> f32 {
+    platform_y(board, lane) + 45.0 + board.stack(lane).map_or(0, <[Ball]>::len) as f32 * 90.0
+}
+fn visible_steps(distance: u64) -> f32 {
+    let remainder = (distance % LANE_COUNT as u64) as u32;
+    if distance >= LANE_COUNT as u64 {
+        LANE_COUNT as f32 + remainder as f32
+    } else {
+        remainder as f32
+    }
+}
+fn transit_position(transit: &Transit, board: &Board, offset: usize) -> Vec2 {
+    let t = (transit.elapsed / transit.duration).clamp(0.0, 1.0);
+    let target = landing_y(board, transit.destination) - offset as f32 * 90.0;
+    match transit.path {
+        Path::Drop => Vec2::new(
+            lane_x(transit.destination),
+            570.0 + (target - 570.0) * t * t,
+        ),
+        Path::Launch {
+            origin,
+            distance,
+            rightward,
+            start_y,
+        } => {
+            let steps = visible_steps(distance);
+            let direction = if rightward { 1.0 } else { -1.0 };
+            let x = LEFT
+                + (lane_x(origin) - LEFT + direction * steps * LANE * t)
+                    .rem_euclid(LANE * LANE_COUNT as f32);
+            let from = start_y - offset as f32 * 90.0;
+            Vec2::new(
+                x,
+                from + (target - from) * t + 4.0 * (180.0 + steps * 6.0) * t * (1.0 - t),
+            )
+        }
+    }
+}
+fn animate(time: Res<Time>, mut field: ResMut<Playfield>, mut motion: ResMut<Motion>) {
+    if field.game_over {
+        return;
+    }
+    let Some(active) = motion.active.as_mut() else {
+        return;
+    };
+    active.elapsed += time.delta_secs();
+    if active.elapsed < active.duration {
+        return;
+    }
+    let Some(landed) = motion.active.take() else {
+        return;
+    };
+    match field.board.land(landed.destination, landed.ball.clone()) {
+        Ok(reaction) => {
+            field.game_over = field.board.is_game_over();
+            if let Some(flight) = reaction {
+                let start_y = landing_y(&field.board, flight.origin);
+                let duration = 0.9 + visible_steps(flight.distance) * 0.04;
+                motion.start(Transit {
+                    ball: flight.ball,
+                    destination: flight.destination,
+                    path: Path::Launch {
+                        origin: flight.origin,
+                        distance: flight.distance,
+                        rightward: flight.origin.is_multiple_of(2),
+                        start_y,
+                    },
+                    elapsed: 0.0,
+                    duration,
+                });
+                field.busy = true;
+            } else {
+                motion.clear();
+                field.busy = false;
+            }
+        }
+        Err(_) => {
+            field.error = Some("Unable to land this ball");
+            field.game_over = true;
+            motion.start(landed);
+        }
+    }
+}
+fn draw_motion(
+    mut commands: Commands,
+    state: (Res<Playfield>, Res<Motion>),
+    window: Single<&Window, With<PrimaryWindow>>,
+    assets: (ResMut<Assets<Mesh>>, ResMut<Assets<ColorMaterial>>),
+    mut visuals: Query<(Entity, &mut Transform, &TransitVisual)>,
+    mut statuses: Query<(Entity, &mut Text2d), With<TransitStatus>>,
+    mut cache: Local<(Option<u64>, f32)>,
+) {
+    let (field, motion) = state;
+    let (mut meshes, mut materials) = assets;
+    let Some(scale) = view_scale(window.width(), window.height()) else {
+        return;
+    };
+    let rebuild = cache.0 != Some(motion.revision) || cache.1 != scale;
+    if rebuild {
+        for (entity, _, _) in &mut visuals {
+            commands.entity(entity).despawn();
+        }
+        for (entity, _) in &statuses {
+            commands.entity(entity).despawn();
+        }
+        cache.0 = Some(motion.revision);
+        cache.1 = scale;
+        if let Some(active) = &motion.active {
+            let position = transit_position(active, &field.board, field.offset);
+            let radius = (20.0 * scale).clamp(22.0, 40.0);
+            let mut parts = Vec::new();
+            for (sector, id) in active.ball.colors.iter().enumerate() {
+                let count = active.ball.colors.count();
+                let mesh = if count == 1 {
+                    meshes.add(Circle::new(radius))
+                } else {
+                    meshes.add(CircularSector::new(
+                        radius,
+                        std::f32::consts::PI / count as f32,
+                    ))
+                };
+                parts.push((
+                    mesh,
+                    materials.add(color(id)),
+                    sector as f32 * std::f32::consts::TAU / count as f32,
+                ));
+            }
+            let cue = active
+                .ball
+                .colors
+                .iter()
+                .map(|id| (u64::from(id.index()) + 1).to_string())
+                .collect::<Vec<_>>()
+                .join("+");
+            commands
+                .spawn((
+                    TransitVisual { target: false },
+                    Transform::from_xyz(position.x, position.y, 40.0),
+                    Visibility::default(),
+                ))
+                .with_children(|children| {
+                    for (mesh, material, angle) in parts {
+                        children.spawn((
+                            Mesh2d(mesh),
+                            MeshMaterial2d(material),
+                            Transform::from_rotation(Quat::from_rotation_z(angle)),
+                        ));
+                    }
+                    children.spawn((
+                        Text2d::new(format!("{}\n{}", cue, active.ball.weight)),
+                        TextFont {
+                            font_size: bevy::text::FontSize::Px((14.0 * scale).max(20.0)),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::BLACK),
+                        Transform::from_xyz(0.0, 0.0, 1.0),
+                    ));
+                });
+            commands.spawn((
+                TransitVisual { target: true },
+                Mesh2d(meshes.add(Annulus::new(radius + 4.0, radius + 8.0))),
+                MeshMaterial2d(materials.add(Color::srgb(0.95, 0.75, 0.3))),
+                Transform::from_xyz(
+                    lane_x(active.destination),
+                    landing_y(&field.board, active.destination) - field.offset as f32 * 90.0,
+                    35.0,
+                ),
+            ));
+            commands.spawn((
+                TransitStatus,
+                Text2d::new(transit_status(active, field.game_over)),
+                TextFont {
+                    font_size: bevy::text::FontSize::Px((14.0 * scale).max(20.0)),
+                    ..default()
+                },
+                TextColor(INK),
+                Transform::from_xyz(0.0, 410.0, 40.0),
+            ));
+        }
+    } else if let Some(active) = &motion.active {
+        let position = transit_position(active, &field.board, field.offset);
+        for (_, mut transform, visual) in &mut visuals {
+            let at = if visual.target {
+                Vec2::new(
+                    lane_x(active.destination),
+                    landing_y(&field.board, active.destination) - field.offset as f32 * 90.0,
+                )
+            } else {
+                position
+            };
+            transform.translation.x = at.x;
+            transform.translation.y = at.y;
+        }
+        for (_, mut text) in &mut statuses {
+            text.0 = transit_status(active, field.game_over);
+        }
+    }
+}
+fn transit_status(active: &Transit, frozen: bool) -> String {
+    let phase = if frozen {
+        "Frozen"
+    } else if active.elapsed >= active.duration * 0.85 {
+        "Landing"
+    } else {
+        match active.path {
+            Path::Drop => "Dropping",
+            Path::Launch { .. } => "Launching",
+        }
+    };
+    match active.path {
+        Path::Drop => format!("{} > lane {}", phase, active.destination + 1),
+        Path::Launch { distance, .. } => {
+            format!("{} {} lanes > {}", phase, distance, active.destination + 1)
+        }
     }
 }
 fn smoke_test(mut commands: Commands, mut smoke: ResMut<Smoke>, mut exit: MessageWriter<AppExit>) {
@@ -727,7 +1041,8 @@ mod tests {
                 Playfield::new(NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN), Random(7))
                     .unwrap_or_else(|e| panic!("fixture: {e:?}")),
             )
-            .add_systems(Update, (pan, input).chain());
+            .init_resource::<Motion>()
+            .add_systems(Update, (pan, input, animate).chain());
         let window = app
             .world_mut()
             .spawn((
@@ -739,6 +1054,18 @@ mod tests {
             ))
             .id();
         (app, window)
+    }
+    fn advance(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs(2));
+        app.world_mut().run_schedule(Update);
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::ZERO);
     }
     fn key(app: &mut App, key: KeyCode) {
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
@@ -860,12 +1187,16 @@ mod tests {
             .cloned();
         key(&mut app, KeyCode::ArrowRight);
         key(&mut app, KeyCode::Space);
+        assert!(app.world().resource::<Playfield>().busy);
+        assert_eq!(app.world().resource::<Playfield>().board.total(1), 0);
+        advance(&mut app);
         let field = app.world().resource::<Playfield>();
         assert_eq!(field.board.stack(1).and_then(|s| s.first()), Some(&held));
         assert_eq!(field.supply.held(), &source[0]);
         assert_eq!(field.supply.previews(1).map(|p| &p[0]), Some(&source[1]));
         assert_eq!(field.supply.previews(0).cloned(), untouched);
         key(&mut app, KeyCode::Enter);
+        advance(&mut app);
         let field = app.world().resource::<Playfield>();
         assert_eq!(
             field.board.stack(1).and_then(|s| s.get(1)),
@@ -893,14 +1224,8 @@ mod tests {
             window,
         });
         touch(&mut app, window, TouchPhase::Ended, -210.0, -815.0, 22);
-        assert_eq!(
-            app.world()
-                .resource::<Playfield>()
-                .board
-                .stack(0)
-                .map(<[Ball]>::len),
-            Some(1)
-        );
+        assert!(app.world().resource::<Motion>().active.is_some());
+        assert_eq!(app.world().resource::<Playfield>().board.total(0), 0);
         app.world_mut().write_message(MouseButtonInput {
             button: MouseButton::Left,
             state: ButtonState::Released,
@@ -912,6 +1237,7 @@ mod tests {
             window,
         });
         app.update();
+        advance(&mut app);
         assert_eq!(
             app.world()
                 .resource::<Playfield>()
@@ -940,6 +1266,7 @@ mod tests {
             assert!(!field.board.is_game_over());
         }
         key(&mut app, KeyCode::Space);
+        advance(&mut app);
         let field = app.world().resource::<Playfield>();
         assert!(field.game_over);
         assert_eq!(field.board.capacity(0), Some(9));
@@ -960,5 +1287,175 @@ mod tests {
         assert_eq!(field.board, Board::default());
         assert_eq!(field.chute.lane(), 0);
         assert_ne!(field.random.0, state);
+    }
+    fn ball(weight: u32) -> Ball {
+        Ball {
+            weight,
+            colors: BallColors::single(ColorId::RED),
+        }
+    }
+    fn mass(field: &Playfield, motion: &Motion) -> u64 {
+        (0..LANE_COUNT)
+            .map(|lane| field.board.total(lane))
+            .sum::<u64>()
+            + motion
+                .active
+                .as_ref()
+                .map_or(0, |t| u64::from(t.ball.weight))
+    }
+    #[test]
+    fn two_launch_chain_is_serial_preserves_balls_and_refills_only_once() {
+        let (mut app, _) = input_app();
+        {
+            let mut field = app.world_mut().resource_mut::<Playfield>();
+            field.config = GeneratorConfig::new(NonZeroU32::new(5).unwrap_or(NonZeroU32::MIN));
+            field.config.joker_percent = 0;
+            field.supply =
+                Supply::new(field.config, &mut || 101).unwrap_or_else(|e| panic!("fixture {e:?}"));
+            field.board.place(0, ball(3));
+            field.board.place(3, ball(1));
+            field.chute.shift(1);
+        }
+        key(&mut app, KeyCode::Space);
+        let supply = app.world().resource::<Playfield>().supply.clone();
+        let random = app.world().resource::<Playfield>().random.0;
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.world().resource::<Playfield>().supply, supply);
+        advance(&mut app);
+        let first = app
+            .world()
+            .resource::<Motion>()
+            .active
+            .as_ref()
+            .unwrap_or_else(|| panic!("first launch"));
+        assert_eq!(first.ball.weight, 3);
+        assert_eq!(first.destination, 2);
+        assert!(matches!(first.path, Path::Launch { distance: 2, .. }));
+        assert_eq!(
+            mass(
+                app.world().resource::<Playfield>(),
+                app.world().resource::<Motion>()
+            ),
+            9
+        );
+        advance(&mut app);
+        let second = app
+            .world()
+            .resource::<Motion>()
+            .active
+            .as_ref()
+            .unwrap_or_else(|| panic!("second launch"));
+        assert_eq!(second.ball.weight, 1);
+        assert_eq!(second.destination, 1);
+        advance(&mut app);
+        assert!(app.world().resource::<Motion>().active.is_none());
+        let field = app.world().resource::<Playfield>();
+        assert!(!field.busy);
+        assert_eq!(field.supply, supply);
+        assert_eq!(field.random.0, random);
+        assert_eq!(mass(field, app.world().resource::<Motion>()), 9);
+        assert_eq!(field.board.stack(1).map(<[Ball]>::len), Some(2));
+        assert_eq!(field.board.stack(2).map(<[Ball]>::len), Some(1));
+    }
+    #[test]
+    fn huge_wraps_are_bounded_and_end_at_the_core_destination() {
+        for (origin, destination, rightward) in [(6, 0, true), (1, 7, false)] {
+            let distance = u64::MAX - 5; // remainder2, preserved without narrowing.
+            let transit = Transit {
+                ball: ball(1),
+                destination,
+                path: Path::Launch {
+                    origin,
+                    distance,
+                    rightward,
+                    start_y: 0.0,
+                },
+                elapsed: 1.0,
+                duration: 1.0,
+            };
+            assert_eq!(visible_steps(distance), 10.0);
+            let position = transit_position(&transit, &Board::default(), 0);
+            assert!((position.x - lane_x(destination)).abs() < 0.01);
+            assert!(transit_status(&transit, false).contains(&distance.to_string()));
+        }
+    }
+    #[test]
+    fn reset_cancels_transit_and_overflow_freezes_emitted_ball() {
+        let (mut app, _) = input_app();
+        key(&mut app, KeyCode::Space);
+        assert!(app.world().resource::<Motion>().active.is_some());
+        key(&mut app, KeyCode::Backspace);
+        assert!(app.world().resource::<Motion>().active.is_none());
+        advance(&mut app);
+        assert_eq!(app.world().resource::<Playfield>().board, Board::default());
+        {
+            let mut field = app.world_mut().resource_mut::<Playfield>();
+            for _ in 0..9 {
+                field.board.place(0, ball(1));
+            }
+            field.board.place(1, ball(8));
+            field.busy = true;
+        }
+        app.world_mut().resource_mut::<Motion>().start(Transit {
+            ball: ball(2),
+            destination: 1,
+            path: Path::Drop,
+            elapsed: 0.0,
+            duration: 0.5,
+        });
+        advance(&mut app);
+        assert!(app.world().resource::<Playfield>().game_over);
+        let frozen = app
+            .world()
+            .resource::<Motion>()
+            .active
+            .clone()
+            .unwrap_or_else(|| panic!("emitted ball preserved"));
+        assert_eq!(frozen.ball.weight, 1);
+        advance(&mut app);
+        assert_eq!(
+            app.world()
+                .resource::<Motion>()
+                .active
+                .as_ref()
+                .map(|t| t.elapsed),
+            Some(0.0)
+        );
+        key(&mut app, KeyCode::Backspace);
+        assert!(app.world().resource::<Motion>().active.is_none());
+        assert!(!app.world().resource::<Playfield>().game_over);
+    }
+    #[test]
+    fn explicit_demo_starts_only_on_input_and_launches_four_then_one() {
+        let (mut app, _) = input_app();
+        *app.world_mut().resource_mut::<Playfield>() =
+            flight_demo().unwrap_or_else(|e| panic!("fixture {e:?}"));
+        assert!(app.world().resource::<Motion>().active.is_none());
+        assert_eq!(app.world().resource::<Playfield>().supply.held().weight, 5);
+        key(&mut app, KeyCode::Space);
+        let supply = app.world().resource::<Playfield>().supply.clone();
+        advance(&mut app);
+        assert!(matches!(
+            app.world()
+                .resource::<Motion>()
+                .active
+                .as_ref()
+                .map(|t| &t.path),
+            Some(Path::Launch { distance: 4, .. })
+        ));
+        advance(&mut app);
+        assert!(matches!(
+            app.world()
+                .resource::<Motion>()
+                .active
+                .as_ref()
+                .map(|t| &t.path),
+            Some(Path::Launch { distance: 1, .. })
+        ));
+        advance(&mut app);
+        assert!(app.world().resource::<Motion>().active.is_none());
+        assert_eq!(app.world().resource::<Playfield>().supply, supply);
+        key(&mut app, KeyCode::Backspace);
+        assert_eq!(app.world().resource::<Playfield>().board, Board::default());
     }
 }

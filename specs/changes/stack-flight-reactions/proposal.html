@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="../../../docs/style.css">
+<title>Stack flight reactions</title>
+<header>
+<a href="../../../docs/index.html">Overpalancing documentation</a>
+</header>
+<main>
+<h1>Stack flight reactions</h1>
+<p>Status: implementation in progress; owner acceptance pending.</p>
+<p>Implement the single-board landing reaction confirmed in question 0007: a complete reversal of the heavier side launches the top ball of the rising stack toward the newly heavier side. The flight distance is the absolute difference between side totals after arrival and before removal.</p>
+<p>Confirmed example: left total 3, right total 2, arriving weight 2 on the right. The totals become 3 and 4, launching the top left ball one field right. The seesaw must reverse fully; an intermediate balanced state does not itself launch a ball.</p>
+<p>This change establishes the deterministic reaction and explicit in-transit ball. Presentation, multiplayer board routing, matching, compression and supply generation are separate concerns.</p>
+<nav aria-label="Change documents">
+<a href="proposal.html">Proposal</a> · <a href="design.html">Design</a> · <a href="tasks.html">Tasks</a> · <a href="scenarios.html">Scenarios</a>
+</nav>
+<p>The explicit --flight-demo option constructs a reproducible level 5 two-launch fixture for render review; Space starts it. Normal startup is unchanged. Scoring, compression and progression are a later complete feature and do not change this PR’s landing rules.</p></main>
+</html>
