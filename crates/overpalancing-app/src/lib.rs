@@ -2197,14 +2197,14 @@ mod tests {
         }
         static_marks.sort_by_key(|mark| mark.sector);
         moving_marks.sort_by_key(|mark| mark.sector);
-        assert_eq!(static_marks.len(), 3);
+        assert_eq!(static_marks.len(), 2);
         assert_eq!(static_marks, moving_marks);
         assert_eq!(
             static_marks
                 .iter()
                 .map(|mark| mark.id.index())
                 .collect::<Vec<_>>(),
-            vec![0, 6, 11]
+            vec![6, 11]
         );
         let mut text = world.query::<&Text2d>();
         assert!(text.iter(world).all(|text| text.0 == "12"));

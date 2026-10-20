@@ -1,5 +1,5 @@
 //! Original, procedural color cues shared by stationary and moving balls.
-//! Six symbols and a stripe bit repeat every twelve IDs; this is a finite cue set.
+//! The first six colors stay plain; later colors repeat a finite twelve-cue set.
 use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology, prelude::*};
 use overpalancing_core::{Ball, ColorId};
 
@@ -17,7 +17,10 @@ pub(super) struct Cue {
     pub symbol: Symbol,
     pub striped: bool,
 }
-pub(super) fn cue(id: ColorId) -> Cue {
+/// Tunable size of the initially distinct, unmarked palette.
+pub(super) const DISTINCT_BASE_COLORS: u32 = 6;
+pub(super) fn cue(id: ColorId) -> Option<Cue> {
+    let index = id.index().checked_sub(DISTINCT_BASE_COLORS)?;
     let symbol = [
         Symbol::Triangle,
         Symbol::Square,
@@ -25,10 +28,36 @@ pub(super) fn cue(id: ColorId) -> Cue {
         Symbol::Plus,
         Symbol::Cross,
         Symbol::Star,
-    ][(id.index() % 6) as usize];
-    Cue {
+    ][(index % 6) as usize];
+    Some(Cue {
         symbol,
-        striped: (id.index() / 6) % 2 == 1,
+        striped: (index / 6) % 2 == 1,
+    })
+}
+fn accent(id: ColorId, lighten: bool) -> Color {
+    let base = super::color(id).to_srgba();
+    let channel = |value: f32| {
+        if lighten {
+            value + (1.0 - value) * 0.18
+        } else {
+            value * 0.78
+        }
+    };
+    Color::srgb(channel(base.red), channel(base.green), channel(base.blue))
+}
+fn weight_ink(ball: &Ball) -> Color {
+    let mut black = f32::INFINITY;
+    let mut white = f32::INFINITY;
+    for id in ball.colors.iter() {
+        let base = super::color(id).to_linear();
+        let luminance = 0.2126 * base.red + 0.7152 * base.green + 0.0722 * base.blue;
+        black = black.min((luminance + 0.05) / 0.05);
+        white = white.min(1.05 / (luminance + 0.05));
+    }
+    if black >= white {
+        Color::BLACK
+    } else {
+        Color::WHITE
     }
 }
 #[derive(Component, Clone, Debug, Eq, PartialEq)]
@@ -47,6 +76,7 @@ pub(super) struct Visual {
     parts: Vec<Part>,
     weight: String,
     font: f32,
+    ink: Color,
 }
 
 fn rotate(point: Vec2, angle: f32) -> Vec2 {
@@ -199,40 +229,6 @@ fn marker_points(symbol: Symbol, radius: f32, count: usize, angle: f32, scale: f
     .map(|p| rotate(p, angle))
     .collect()
 }
-fn outline_mesh(symbol: Symbol, radius: f32, scale: f32) -> Mesh {
-    let points = symbol_points(symbol)
-        .into_iter()
-        .map(|p| p * radius * 0.74)
-        .collect::<Vec<_>>();
-    let mut triangles = Vec::new();
-    for index in 0..points.len() {
-        let a = points[index];
-        let b = points[(index + 1) % points.len()];
-        let direction = (b - a).normalize();
-        let normal = Vec2::new(-direction.y, direction.x) * scale * 0.85;
-        let polygon = clip_sector(
-            vec![a - normal, b - normal, b + normal, a + normal],
-            radius * 0.97,
-            1,
-        );
-        if polygon.len() >= 3 {
-            let center = polygon.iter().copied().sum::<Vec2>() / polygon.len() as f32;
-            for i in 0..polygon.len() {
-                for p in [center, polygon[i], polygon[(i + 1) % polygon.len()]] {
-                    triangles.push([p.x, p.y, 0.0]);
-                }
-            }
-        }
-    }
-    let count = triangles.len();
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, triangles)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; count])
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 0.0]; count])
-}
 pub(super) fn build(
     ball: &Ball,
     meshes: &mut Assets<Mesh>,
@@ -242,12 +238,6 @@ pub(super) fn build(
     let radius = radius(scale);
     let font = (14.0 * scale).max(20.0);
     let weight = ball.weight.to_string();
-    let plate = Vec2::new(
-        (weight.len() as f32 * font * 0.29 + scale * 2.0).clamp(radius * 0.36, radius * 0.80),
-        scale * 6.0,
-    );
-    let ink = materials.add(Color::srgb(0.025, 0.035, 0.055));
-    let stripe = materials.add(Color::srgba(0.98, 0.99, 1.0, 0.72));
     let mut parts = Vec::new();
     let count = ball.colors.count();
     for (sector, id) in ball.colors.iter().enumerate() {
@@ -266,7 +256,10 @@ pub(super) fn build(
             transform: Transform::from_rotation(Quat::from_rotation_z(angle)),
             marking: None,
         });
-        let cue = cue(id);
+        let Some(cue) = cue(id) else {
+            continue;
+        };
+        let marker_material = materials.add(accent(id, false));
         if cue.striped {
             for polygon in stripes(radius, count) {
                 if polygon.len() >= 3 {
@@ -276,41 +269,26 @@ pub(super) fn build(
                         .collect::<Vec<_>>();
                     parts.push(Part {
                         mesh: meshes.add(polygon_mesh(&points)),
-                        material: stripe.clone(),
+                        material: materials.add(accent(id, true)),
                         transform: Transform::from_xyz(0.0, 0.0, 1.0),
                         marking: None,
                     });
                 }
             }
         }
-        let marker = if count == 1 {
-            outline_mesh(cue.symbol, radius, scale)
-        } else {
-            polygon_mesh(&marker_points(cue.symbol, radius, count, angle, scale))
-        };
+        let marker = polygon_mesh(&marker_points(cue.symbol, radius, count, angle, scale));
         parts.push(Part {
             mesh: meshes.add(marker),
-            material: ink.clone(),
+            material: marker_material,
             transform: Transform::from_xyz(0.0, 0.0, 2.0),
             marking: Some(Marking { id, cue, sector }),
         });
     }
-    parts.push(Part {
-        mesh: meshes.add(Annulus::new(radius - scale * 0.55, radius)),
-        material: ink,
-        transform: Transform::from_xyz(0.0, 0.0, 3.0),
-        marking: None,
-    });
-    parts.push(Part {
-        mesh: meshes.add(Ellipse::new(plate.x, plate.y)),
-        material: materials.add(Color::srgb(0.98, 0.98, 0.96)),
-        transform: Transform::from_xyz(0.0, 0.0, 4.0),
-        marking: None,
-    });
     Visual {
         parts,
         weight,
         font,
+        ink: weight_ink(ball),
     }
 }
 pub(super) fn spawn(children: &mut ChildSpawnerCommands<'_>, visual: Visual) {
@@ -331,7 +309,7 @@ pub(super) fn spawn(children: &mut ChildSpawnerCommands<'_>, visual: Visual) {
             ..default()
         },
         TextLayout::justify(Justify::Center),
-        TextColor(Color::BLACK),
+        TextColor(visual.ink),
         Transform::from_xyz(0.0, 0.0, 8.0),
     ));
 }
@@ -340,15 +318,56 @@ pub(super) fn spawn(children: &mut ChildSpawnerCommands<'_>, visual: Visual) {
 mod tests {
     use super::*;
     #[test]
-    fn first_twelve_cues_are_distinct_and_large_ids_are_bounded_deterministic() {
-        let cues = (0..12).map(|id| cue(ColorId::new(id))).collect::<Vec<_>>();
+    fn first_six_colors_are_plain_then_twelve_cues_repeat_deterministically() {
+        for id in 0..DISTINCT_BASE_COLORS {
+            assert_eq!(cue(ColorId::new(id)), None);
+        }
+        let cues = (6..18).map(|id| cue(ColorId::new(id))).collect::<Vec<_>>();
         for a in 0..12 {
+            assert!(cues[a].is_some());
             for b in a + 1..12 {
                 assert_ne!(cues[a], cues[b]);
             }
         }
-        for id in [0, 11, 12, 31, u32::MAX] {
-            assert_eq!(cue(ColorId::new(id)), cue(ColorId::new(id % 12)));
+        for id in [6, 11, 18, 31, u32::MAX] {
+            assert_eq!(
+                cue(ColorId::new(id)),
+                cue(ColorId::new(
+                    DISTINCT_BASE_COLORS + (id - DISTINCT_BASE_COLORS) % 12
+                ))
+            );
+        }
+    }
+    #[test]
+    fn accents_are_moderate_shades_of_their_fill_and_plain_balls_have_no_extra_meshes() {
+        for id in 6..30 {
+            let id = ColorId::new(id);
+            let base = super::super::color(id).to_srgba();
+            let dark = accent(id, false).to_srgba();
+            let light = accent(id, true).to_srgba();
+            for (b, d, l) in [
+                (base.red, dark.red, light.red),
+                (base.green, dark.green, light.green),
+                (base.blue, dark.blue, light.blue),
+            ] {
+                assert!((d - b * 0.78).abs() < 0.00001);
+                assert!((l - (b + (1.0 - b) * 0.18)).abs() < 0.00001);
+                assert!((d - b).abs() <= 0.22);
+                assert!((l - b).abs() <= 0.18);
+            }
+        }
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<ColorMaterial>::default();
+        for id in 0..6 {
+            let ball = Ball {
+                weight: 12,
+                colors: overpalancing_core::BallColors::single(ColorId::new(id)),
+            };
+            let visual = build(&ball, &mut meshes, &mut materials, 2.4);
+            assert_eq!(visual.parts.len(), 1);
+            assert!(visual.parts.iter().all(|part| part.marking.is_none()));
+            assert_eq!(visual.weight, "12");
+            assert!(visual.ink == Color::BLACK || visual.ink == Color::WHITE);
         }
     }
     #[test]
@@ -358,8 +377,15 @@ mod tests {
                 let angle = sector as f32 * std::f32::consts::TAU / count as f32;
                 let plate = Vec2::new(46.0 * 0.80, 2.4 * 6.0);
                 for id in 0..12 {
-                    let points =
-                        marker_points(cue(ColorId::new(id)).symbol, 46.0, count, angle, 2.4);
+                    let points = marker_points(
+                        cue(ColorId::new(id + 6))
+                            .unwrap_or_else(|| panic!("marked color"))
+                            .symbol,
+                        46.0,
+                        count,
+                        angle,
+                        2.4,
+                    );
                     assert!(points.len() >= 3);
                     for p in points {
                         let local = rotate(p, -angle);
