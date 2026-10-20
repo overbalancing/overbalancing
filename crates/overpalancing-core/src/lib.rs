@@ -1,6 +1,7 @@
 //! Deterministic game domain, independent of rendering and platform services.
 #![forbid(unsafe_code)]
 
+pub mod flight;
 pub mod supply;
 
 /// Number of seesaws in the game board.

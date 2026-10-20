@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="../../../docs/style.css">
+<title>Flight acceptance scenarios</title>
+<header>
+<a href="../../../docs/index.html">Overpalancing documentation</a>
+</header>
+<main>
+<h1>Flight acceptance scenarios</h1>
+<h2>Confirmed full reversal</h2>
+<p>Left total 3 and right total 2 receive weight 2 on the right. Final totals 3 and 4 launch only the top left ball one field right. A transition to or from balanced does not launch; adding to an already heavier side does not launch.</p>
+<h2>Explicit two-flight chain</h2>
+<p>Prepare lane 0 with bottom weight 1 and top weight 2, lane 1 with weight 2, lane 4 with weight 1 and lane 5 with weight 2. Land weight 5 in lane 1. The top lane-0 ball flies four fields right to lane 4. Its explicit landing reverses that seesaw and launches lane 5's top weight 2 one field left to lane 4. Its next landing settles. Final totals are lane 0 = 1, lane 1 = 7 and lane 4 = 5. All other lanes are empty.</p>
+<p>At every transition, board weight plus in-transit weight equals 13, and board count plus in-transit count equals six. A flight is owned by the caller until landed; source supply is not consumed for a chain reaction.</p>
+<h2>Large arithmetic and wrap</h2>
+<p>Side totals may exceed u32 and must be compared as u64. With positive u32 arrivals, a strict reversal's distance is arrival weight minus the prior heavy-side lead. The lead is at least one, so the maximum possible single-arrival distance is u32::MAX minus one. The public distance remains u64 for arithmetic robustness and possible future weight changes. Tests cover this maximum valid distance, both wrap directions and distances divisible by eight.</p>
+<h2>Application acceptance</h2>
+<p>Animate the initial drop and each emitted flight in sequence. Disable additional player drops while a ball is in transit. A chain landing uses the same core landing rule and consumes no additional supply. Check game over after the landing reaction has removed its launched top ball. Reset cancels in-transit state. Matching, compression and multiplayer routing remain outside this change.</p>
+<nav aria-label="Change documents">
+<a href="proposal.html">Proposal</a> · <a href="design.html">Design</a> · <a href="tasks.html">Tasks</a> · <a href="scenarios.html">Scenarios</a>
+</nav>
+</main>
+</html>

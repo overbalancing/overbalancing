@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="../../../docs/style.css">
+<title>Flight design</title>
+<header>
+<a href="../../../docs/index.html">Overpalancing documentation</a>
+</header>
+<main>
+<h1>Flight design</h1>
+<p>Board::land validates lane and positive weight before mutation, captures prior balance, appends the arriving ball and evaluates the new balance. Only left-heavy to right-heavy or right-heavy to left-heavy is a launch. Balanced transitions and arrivals on an already heavier side settle normally.</p>
+<p>A Flight owns the removed top ball, origin lane, full u64 distance and wrapped destination. Distances wrap over the eight lanes of one board. Rightward travel adds distance; leftward travel subtracts it. Modulo is applied before narrowing to a lane index. A distance divisible by eight returns to the origin lane.</p>
+<p>Removal triggers no additional reaction. The caller explicitly lands an emitted ball later, permitting frame-driven animation and subsequent reactions without recursive resolution. The caller must retain the in-transit ball to conserve board plus flight contents. The application animates the initial drop and each subsequent flight, blocks another player drop while transit is active, and checks game over after the full landing reaction. Reset cancels transit. A chain reaction never consumes another supply ball. Concurrent landing order and multiplayer routing are not defined here.</p>
+<p>Board::place remains a raw placement operation for setup and fixtures. No random input, Bevy dependency, physics integration or new crate is introduced.</p>
+<p>
+<a href="scenarios.html">Acceptance scenarios and arithmetic bounds</a>
+</p>
+<nav aria-label="Change documents">
+<a href="proposal.html">Proposal</a> · <a href="design.html">Design</a> · <a href="tasks.html">Tasks</a> · <a href="scenarios.html">Scenarios</a>
+</nav>
+</main>
+</html>
