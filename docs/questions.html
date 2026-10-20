@@ -28,17 +28,17 @@
 <p>Owner answer, 2026-10-19: fixed stacks. Balls do not roll; weight-triggered launches, edge wrapping and opponent-first split-screen routing are recorded in the <a href="../specs/current/game-concept.html">game concept</a>.</p>
 <h2 id="0006-FLIGHT-RULE">0006-FLIGHT-RULE — answered</h2>
 <p>For arbitrary stacks and arriving weights, what determines which balls launch and how far: the arriving ball or side totals, and the top opposing ball or multiple balls? What exactly is one field? How does a landing trigger the next launch?</p>
-<p>Owner answer, 2026-10-19: use the sum of the entire stack; launch only the top ball; one field means the neighboring stack position. The exact launch trigger and general distance formula remain unresolved in the game concept, particularly the different outcomes of two separate weight-1 arrivals and one weight-2 arrival.</p>
+<p>Owner answer, 2026-10-19: use the sum of the entire stack; launch only the top ball; one field means the neighboring stack position. The full-reversal trigger and complete-stack difference were subsequently confirmed in 0007-FLIGHT-TRIGGER.</p>
 <h2 id="0007-FLIGHT-TRIGGER">0007-FLIGHT-TRIGGER — answered</h2>
 <p>Does launch distance use the arriving ball weight minus the opposing stack sum, even when the landing side already holds balls, or the difference of both full stack sums with a separate launch condition? Owner answer, 2026-10-19: compare the complete stack totals and trigger a launch when the seesaw flips fully from one heavy side to the opposite heavy side without balancing in between. Example: left total 3, right total 2, arriving weight 2 on the right gives 3 versus 4; the top left ball flies one field right, from the resulting difference 1.</p>
 <h2 id="0008-JOKER-COLORS">0008-JOKER-COLORS — answered</h2>
 <p>Owner answer, 2026-10-20: 5% of generated balls have two or three colors. Level 1 has no jokers. A level-2 joker can only use the two available colors; higher levels can supply two or three unique colors.</p>
 <h2 id="0009-SUPPLY-AND-WEIGHTS">0009-SUPPLY-AND-WEIGHTS — answered</h2>
 <p>Owner answer, 2026-10-20: show the next two balls above each stack and keep one ball in the chute, replaced immediately after each drop. Start with nine vertical positions: lowered side nine, balanced eight, raised side seven. Integer weights in the specified mathematical interval L/2 through L use ceil(L/2), at least 1; source selection is clarified separately in 0010.</p>
-<h2 id="0010-CHUTE-REFILL">0010-CHUTE-REFILL — open</h2>
-<p>Proposed: the held ball travels with the chute; after a drop, take the first preview above the current destination stack, shift its second preview forward and generate one replacement. Owner confirmation pending.</p>
-<h2 id="0011-STACK-OVERFLOW">0011-STACK-OVERFLOW — open</h2>
-<p>What happens when a stack exceeds its 9/8/7 positions, including a reduction in available height after tilting? Game over, blocked drops, or visible overflow pending later rules? No loss condition is assumed.</p>
+<h2 id="0010-CHUTE-REFILL">0010-CHUTE-REFILL — answered</h2>
+<p>Owner answer, 2026-10-20: yes. The held ball travels with the chute; after a drop, take the first preview above the current destination stack, shift its second preview forward and generate one replacement.</p>
+<h2 id="0011-STACK-OVERFLOW">0011-STACK-OVERFLOW — answered</h2>
+<p>Owner answer, 2026-10-20: exceeding the available 9/8/7 stack positions is Game Over. This also applies when tilting reduces the available height of an already occupied stack.</p>
 </main>
 </body>
 </html>

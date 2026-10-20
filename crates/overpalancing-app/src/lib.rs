@@ -11,6 +11,7 @@ use std::{
 };
 // SplitMix64 transition described by https://prng.di.unimi.it/splitmix64.c.
 // Non-cryptographic gameplay samples; core receives samples rather than entropy.
+#[derive(Clone, Copy)]
 struct Random(u64);
 impl Random {
     fn seeded() -> Self {
@@ -43,6 +44,8 @@ struct Playfield {
     offset: usize,
     config: GeneratorConfig,
     random: Random,
+    game_over: bool,
+    error: Option<&'static str>,
 }
 impl Playfield {
     fn new(level: NonZeroU32, mut random: Random) -> Result<Self, GenerationError> {
@@ -55,13 +58,43 @@ impl Playfield {
             offset: 0,
             config,
             random,
+            game_over: false,
+            error: None,
         })
+    }
+    fn drop_ball(&mut self) -> Result<(), &'static str> {
+        if self.game_over {
+            return Ok(());
+        }
+        let source = self.chute.lane();
+        let mut random = self.random;
+        let next = self
+            .config
+            .generate(&mut || random.next())
+            .map_err(|_| "Unable to generate a ball")?;
+        let mut supply = self.supply.clone();
+        let held = supply
+            .take_and_refill(source, next)
+            .map_err(|_| "Unable to refill this lane")?;
+        let mut board = self.board.clone();
+        if !board.place(source, held) {
+            return Err("Unable to place this ball");
+        }
+        self.game_over = board.is_game_over();
+        self.board = board;
+        self.supply = supply;
+        self.random = random;
+        self.error = None;
+        Ok(())
     }
     fn reset(&mut self) {
         if let Ok(supply) = Supply::new(self.config, &mut || self.random.next()) {
             self.supply = supply;
             self.board.clear();
             self.offset = 0;
+            self.chute = Dispenser::default();
+            self.game_over = false;
+            self.error = None;
         }
     }
 }
@@ -513,7 +546,7 @@ fn redraw(
     );
     button(
         &mut commands,
-        "DROP PENDING",
+        if field.game_over { "STOPPED" } else { "DROP" },
         -210.0,
         -815.0,
         390.0,
@@ -523,13 +556,41 @@ fn redraw(
     button(&mut commands, "RESET", 210.0, -815.0, 390.0, false, scale);
     label(
         &mut commands,
-        "Left/Right or tap: chute\nWheel / drag: inspect | Refill rule pending",
+        "Left/Right or tap: chute | Space: drop\nWheel / drag: inspect | Backspace: reset",
         0.0,
         -960.0,
         18.0,
         scale,
         INK,
     );
+    if field.game_over {
+        commands.spawn((
+            Scene,
+            Sprite::from_color(Color::srgb(0.6, 0.05, 0.08), Vec2::new(780.0, 250.0)),
+            Transform::from_xyz(0.0, -30.0, 20.0),
+        ));
+        commands.spawn((
+            Scene,
+            Text2d::new("GAME OVER\nStack capacity exceeded\nReset to play again"),
+            TextFont {
+                font_size: bevy::text::FontSize::Px((18.0 * scale).max(28.0)),
+                ..default()
+            },
+            TextLayout::justify(Justify::Center),
+            TextColor(Color::WHITE),
+            Transform::from_xyz(0.0, -30.0, 30.0),
+        ));
+    } else if let Some(error) = field.error {
+        label(
+            &mut commands,
+            error,
+            0.0,
+            0.0,
+            24.0,
+            scale,
+            Color::srgb(1.0, 0.4, 0.4),
+        );
+    }
 }
 fn pan(
     mut wheels: MessageReader<bevy::input::mouse::MouseWheel>,
@@ -582,22 +643,30 @@ fn input(
     touches: Res<Touches>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut field: ResMut<Playfield>,
+    mut ignore_mouse: Local<u8>,
 ) {
+    let touch_activity =
+        touches.iter().next().is_some() || touches.iter_just_released().next().is_some();
+    *ignore_mouse = if touch_activity {
+        2
+    } else {
+        ignore_mouse.saturating_sub(1)
+    };
+    let mut drop_requested = keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Enter);
+    let mut reset_requested = keys.just_pressed(KeyCode::Backspace);
     if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
         field.chute.shift(-1);
     }
     if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
         field.chute.shift(1);
     }
-    if keys.just_pressed(KeyCode::Backspace) {
-        field.reset();
-    }
+
     let pointer = touches
         .iter_just_released()
         .find(|touch| touch.distance().length() <= 10.0)
         .map(|t| t.position())
         .or_else(|| {
-            (touches.iter().next().is_none() && mouse.just_pressed(MouseButton::Left))
+            (*ignore_mouse == 0 && mouse.just_pressed(MouseButton::Left))
                 .then(|| window.cursor_position())
                 .flatten()
         });
@@ -610,9 +679,18 @@ fn input(
             field
                 .chute
                 .select_fraction((point.x - LEFT) / (LANE * LANE_COUNT as f32));
-        } else if (point.y + 815.0).abs() <= 55.0 && point.x > 0.0 && point.x <= 400.0 {
-            field.reset();
+        } else if (point.y + 815.0).abs() <= 55.0 && (-400.0..=400.0).contains(&point.x) {
+            if point.x < 0.0 {
+                drop_requested = true;
+            } else {
+                reset_requested = true;
+            }
         }
+    }
+    if reset_requested {
+        field.reset();
+    } else if drop_requested && let Err(error) = field.drop_ball() {
+        field.error = Some(error);
     }
 }
 fn smoke_test(mut commands: Commands, mut smoke: ResMut<Smoke>, mut exit: MessageWriter<AppExit>) {
@@ -762,5 +840,125 @@ mod tests {
         assert_eq!(field.chute.lane(), 7);
         assert!(field.offset > 0);
         assert_eq!(field.board.stack(0).map(<[Ball]>::len), Some(14));
+    }
+    #[test]
+    fn real_keyboard_drop_preserves_held_and_refills_only_destination() {
+        let (mut app, _) = input_app();
+        let held = app.world().resource::<Playfield>().supply.held().clone();
+        let source = app
+            .world()
+            .resource::<Playfield>()
+            .supply
+            .previews(1)
+            .cloned()
+            .unwrap_or_else(|| panic!("lane exists"));
+        let untouched = app
+            .world()
+            .resource::<Playfield>()
+            .supply
+            .previews(0)
+            .cloned();
+        key(&mut app, KeyCode::ArrowRight);
+        key(&mut app, KeyCode::Space);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.board.stack(1).and_then(|s| s.first()), Some(&held));
+        assert_eq!(field.supply.held(), &source[0]);
+        assert_eq!(field.supply.previews(1).map(|p| &p[0]), Some(&source[1]));
+        assert_eq!(field.supply.previews(0).cloned(), untouched);
+        key(&mut app, KeyCode::Enter);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(
+            field.board.stack(1).and_then(|s| s.get(1)),
+            Some(&source[0])
+        );
+        assert_eq!(field.supply.held(), &source[1]);
+    }
+    #[test]
+    fn real_touch_drop_ignores_same_and_next_frame_synthesized_mouse() {
+        use bevy::input::{ButtonState, mouse::MouseButtonInput};
+        let (mut app, window) = input_app();
+        let scale = view_scale(390.0, 844.0).unwrap_or(1.0);
+        app.world_mut()
+            .entity_mut(window)
+            .get_mut::<Window>()
+            .unwrap_or_else(|| panic!("window"))
+            .set_cursor_position(Some(Vec2::new(
+                195.0 - 210.0 / scale,
+                422.0 + 815.0 / scale,
+            )));
+        touch(&mut app, window, TouchPhase::Started, -210.0, -815.0, 22);
+        app.world_mut().write_message(MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Pressed,
+            window,
+        });
+        touch(&mut app, window, TouchPhase::Ended, -210.0, -815.0, 22);
+        assert_eq!(
+            app.world()
+                .resource::<Playfield>()
+                .board
+                .stack(0)
+                .map(<[Ball]>::len),
+            Some(1)
+        );
+        app.world_mut().write_message(MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Released,
+            window,
+        });
+        app.world_mut().write_message(MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Pressed,
+            window,
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<Playfield>()
+                .board
+                .stack(0)
+                .map(<[Ball]>::len),
+            Some(1)
+        );
+    }
+    #[test]
+    fn untouched_raised_stack_ends_game_blocks_supply_and_reset_restores() {
+        let (mut app, _) = input_app();
+        {
+            let mut field = app.world_mut().resource_mut::<Playfield>();
+            for lane in 0..2 {
+                for _ in 0..8 {
+                    field.board.place(
+                        lane,
+                        Ball {
+                            weight: 1,
+                            colors: BallColors::single(ColorId::RED),
+                        },
+                    );
+                }
+            }
+            assert!(!field.board.is_game_over());
+        }
+        key(&mut app, KeyCode::Space);
+        let field = app.world().resource::<Playfield>();
+        assert!(field.game_over);
+        assert_eq!(field.board.capacity(0), Some(9));
+        assert_eq!(field.board.capacity(1), Some(7));
+        assert_eq!(field.board.overflow(1), Some(1));
+        let stopped = field.supply.clone();
+        let state = field.random.0;
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::ArrowRight);
+        key(&mut app, KeyCode::Space);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.supply, stopped);
+        assert_eq!(field.random.0, state);
+        assert_eq!(field.chute.lane(), 1);
+        key(&mut app, KeyCode::Backspace);
+        let field = app.world().resource::<Playfield>();
+        assert!(!field.game_over);
+        assert_eq!(field.board, Board::default());
+        assert_eq!(field.chute.lane(), 0);
+        assert_ne!(field.random.0, state);
     }
 }

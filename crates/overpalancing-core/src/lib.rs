@@ -194,6 +194,15 @@ impl Board {
         Some(self.stack(lane)?.len().saturating_sub(self.capacity(lane)?))
     }
 
+    /// Whether any stack exceeds its current weight-dependent capacity.
+    ///
+    /// Capacity is re-evaluated for every side: a tilt may overflow the rising
+    /// stack without placing a ball directly onto it. This query never removes
+    /// balls; the application stops further player drops after game over.
+    pub fn is_game_over(&self) -> bool {
+        (0..LANE_COUNT).any(|lane| self.overflow(lane).is_some_and(|count| count > 0))
+    }
+
     /// Empty every stack while preserving allocated storage for repeated experiments.
     pub fn clear(&mut self) {
         for stack in &mut self.stacks {
@@ -210,6 +219,46 @@ mod tests {
             weight,
             colors: BallColors::single(color),
         }
+    }
+
+    #[test]
+    fn exact_capacity_is_safe_and_any_overflow_ends_the_game() {
+        let mut board = Board::default();
+        assert!(!board.is_game_over());
+        for lane in [0, 1] {
+            for _ in 0..8 {
+                assert!(board.place(lane, ball(1, ColorId::RED)));
+            }
+        }
+        assert_eq!(board.capacity(0), Some(8));
+        assert_eq!(board.overflow(0), Some(0));
+        assert!(!board.is_game_over());
+        // Right becomes heavier; the untouched left side shrinks from eight to seven.
+        assert!(board.place(1, ball(1, ColorId::BLUE)));
+        assert_eq!(board.capacity(1), Some(9));
+        assert_eq!(board.overflow(1), Some(0));
+        assert_eq!(board.capacity(0), Some(7));
+        assert_eq!(board.overflow(0), Some(1));
+        assert!(board.is_game_over());
+        assert_eq!(board.stack(0).map(<[Ball]>::len), Some(8));
+        board.clear();
+        assert!(!board.is_game_over());
+    }
+
+    #[test]
+    fn heavy_capacity_nine_and_light_capacity_seven_allow_the_exact_boundary() {
+        let mut board = Board::default();
+        for _ in 0..9 {
+            assert!(board.place(0, ball(2, ColorId::RED)));
+        }
+        for _ in 0..7 {
+            assert!(board.place(1, ball(1, ColorId::BLUE)));
+        }
+        assert_eq!(board.overflow(0), Some(0));
+        assert_eq!(board.overflow(1), Some(0));
+        assert!(!board.is_game_over());
+        assert!(board.place(0, ball(1, ColorId::RED)));
+        assert!(board.is_game_over());
     }
 
     #[test]

@@ -11,10 +11,10 @@
 <h1>Level supply tasks</h1>
 <ul>
 <li>Done: arbitrary color IDs and bounded nonempty per-ball colors, with 11 core tests.</li>
-<li>Confirmed: 5% two/three-color jokers, level 1 none, two previews per stack, held chute ball and 9/8/7 positions. Pending source-refill/overflow answers 0010/0011.</li>
+<li>Confirmed: 5% two/three-color jokers, level 1 none, two previews per stack, held chute ball and 9/8/7 positions. Destination-lane refill and Game Over on overflow are confirmed in 0010/0011.</li>
 <li>Done: tested level generator and 17-ball supply (two previews per lane plus held ball), configurable 5% jokers and informational 9/8/7 capacity; 16 core tests pass.</li>
-<li>Done: reference-inspired responsive app, two previews per lane, held-ball persistence, wheel/touch inspection and 9/8/7 platform geometry. Drop is intentionally pending source decision 0010.</li>
-<li>Done: actual Linux level 4 render and resize to 390×844; 21 core/app tests, Clippy, doctests, Rustdoc and HTML checks pass. Placement render and final UX/platform checks await the complete feature.</li>
+<li>Done: reference-inspired responsive app, two previews per lane, held-ball persistence, wheel/touch inspection and 9/8/7 platform geometry. Done: active drop/refill from the destination lane, Game Over and reset with actual keyboard/touch-system tests.</li>
+<li>Done: actual Linux filled landscape and 390×844 render, X11 drop/refill, Game Over, blocked input, reset and mouse drop. 26 Rust tests, Clippy, doctests, Rustdoc, audit, deny, HTML, nine PR-policy tests and Actionlint pass. Final UX review and platform CI tracked separately.</li>
 <li>Pending: owner acceptance.</li>
 </ul>
 <nav>

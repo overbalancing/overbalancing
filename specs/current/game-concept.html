@@ -19,8 +19,8 @@
 <li>Balls have different weights and colors.</li>
 <li>Start at level 1 with one color; each level adds a color, so level L has L available colors. Generated weights range from L/2 through L, never below 1. For integer weights, the lower bound is ceil(L/2).</li>
 <li>Ball generation has a code-configurable joker probability, initially 5%. Jokers have two or three distinct available colors; level 1 has no jokers. At level 2, only two distinct colors are possible.</li>
-<li>Show two upcoming balls above each stack and keep one held ball in the chute. The held ball moves with the chute and is replaced immediately after a drop. The refilling source is pending question 0010.</li>
-<li>A lowered side has nine vertical ball positions, a balanced side eight and a raised side seven. Overflow consequences remain pending question 0011.</li>
+<li>Show two upcoming balls above each stack and keep one held ball in the chute. The held ball moves with the chute and is replaced immediately after a drop. After a drop, the front preview above the destination stack enters the chute; its next preview shifts forward and one generated ball fills the back.</li>
+<li>A lowered side has nine vertical ball positions, a balanced side eight and a raised side seven. Exceeding the available positions is Game Over, including when tilting raises an occupied stack.</li>
 <li>Upper supplies sit above each stack; the chute can place a supplied ball elsewhere. Manual Lower/Higher/Weight/Color sandbox controls are removed in the level-driven view.</li>
 <li>Balls occupy fixed stacks on either side of a seesaw; they do not roll. Balls may move between fields by being launched.</li>
 <li>Owner examples, starting with one weight-1 ball on the left: placing weight 1 on the right balances the seesaw; adding another weight-1 ball on the right lowers that side without a launch. Placing weight 2 instead launches the left weight-1 ball one field to the right; weight 3 launches it two fields to the right.</li>
