@@ -26,21 +26,18 @@
 <li>Owner examples, starting with one weight-1 ball on the left: placing weight 1 on the right balances the seesaw; adding another weight-1 ball on the right lowers that side without a launch. Placing weight 2 instead launches the left weight-1 ball one field to the right; weight 3 launches it two fields to the right.</li>
 <li>Use the sum of the entire stack for the weight comparison, rather than only its top ball. When a launch occurs, only the top ball of the opposing stack flies. One field is one neighboring stack position.</li>
 <li>A launch is triggered by a full reversal from one heavy side to the opposite heavy side, without passing through a separately resolved balanced state. Use the resulting difference between complete stack totals as flight distance; launch only the top ball from the now rising side toward the heavier side. Example: left 3 versus right 2 plus an arriving 2 on the right gives 3 versus 4 and launches the top left ball one field right. Becoming balanced or leaving a balanced state does not itself count as a full reversal.</li>
-<li>Flights and landings enable chain reactions. Simultaneous reaction ordering remains to be specified.</li>
+<li>Flights and landings enable chain reactions. Locally resolve compression, then evaluate seesaw weights, tilt and emitted flights before clearing and scoring. Horizontal matches use the resulting physical positions, including the new tilt after a landing on a balanced seesaw. Repeat this order after gravity and subsequent landings.</li>
 <li>A ball flying beyond the right edge re-enters from the left, and vice versa. In split-screen play it enters the other player's board first.</li>
-<li>Five vertically stacked balls of the same color compress into one ball.</li>
-<li>A horizontal row of three or more balls of the same color clears together with balls of that same color connected horizontally and vertically.</li>
+<li>Five vertically consecutive single-color balls of the same color compress into one single-color ball with their summed weights. Jokers never compress: any ball with two or three colors breaks the vertical compression run.</li>
+<li>A horizontal row of three or more balls of the same color seeds clearing of the entire orthogonally connected group. Jokers bridge color changes: red can connect through a red/blue joker into blue and onwards through further jokers. Points equal the total weights of the removed balls multiplied by 100; each removed ball is counted once.</li>
 <li>A ball may have up to three colors and acts as a joker.</li>
 </ul>
-<h2>Unresolved before gameplay implementation</h2>
+<h2>Initial progression tuning</h2><p>The lead proposes an adjustable points curve: start at level 1; gaining the next level requires 1000 times the current level in additional points. Keep points beyond a threshold and preserve already visible balls when the palette grows. The owner is considering starting at level 3 but has not chosen that change; the existing --level 3 option supports comparison.</p><h2>Unresolved future rules</h2>
 <ul>
-<li>Mass after compression and mass distribution.</li>
-<li>Ordering of simultaneous landings, launches, compression and matching; placement into overflowing stacks and multiplayer scheduling. Full reversal trigger, stack-total difference, top-ball selection and neighboring-stack distance unit are confirmed.</li>
-<li>Whether multicolor matching uses shared colors, a chosen color, or another rule.</li>
-<li>Resolution ordering for simultaneous compression, matches and intersecting color groups.</li>
-<li>Board capacity, placement constraints, scoring, failure conditions and dispenser sequencing.</li>
+<li>Multiplayer scheduling and opponent-first flight routing across boards.</li>
+<li>Further level progression tuning and the final starting level.</li>
 </ul>
-<p>The first-view feature must not silently decide these questions. Route new ideas to this capability or a new focused capability and use change proposals for implementation.</p>
+<p>Route new ideas to this capability or a new focused capability and use change proposals for implementation.</p>
 </main>
 <footer>Overpalancing · Source-available game</footer>
 </body>
