@@ -1,6 +1,8 @@
 //! Deterministic game domain, independent of rendering and platform services.
 #![forbid(unsafe_code)]
 
+pub mod supply;
+
 /// Number of seesaws in the game board.
 pub const SEESAW_COUNT: usize = 4;
 /// Each seesaw has two selectable sides.
@@ -129,7 +131,8 @@ pub enum Balance {
 /// Eight fixed stacks, ordered left to right, paired into four seesaws.
 ///
 /// Each stack is ordered bottom to top. Placement only appends a ball;
-/// flights, matching, compression and capacity rules are deliberately absent.
+/// flights, matching and compression are absent. Available positions can be
+/// queried, but raw placement does not enforce an overflow consequence.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Board {
     stacks: [Vec<Ball>; LANE_COUNT],
@@ -173,6 +176,22 @@ impl Board {
                 std::cmp::Ordering::Less => Balance::RightHeavy,
             },
         )
+    }
+
+    /// Visible capacity: heavy side nine, balanced eight, rising side seven.
+    pub fn capacity(&self, lane: usize) -> Option<usize> {
+        if lane >= LANE_COUNT {
+            return None;
+        }
+        Some(match (self.balance(lane / 2), lane.is_multiple_of(2)) {
+            (Some(Balance::Balanced), _) => 8,
+            (Some(Balance::LeftHeavy), true) | (Some(Balance::RightHeavy), false) => 9,
+            _ => 7,
+        })
+    }
+    /// Number of balls beyond visible capacity, without rejection or deletion.
+    pub fn overflow(&self, lane: usize) -> Option<usize> {
+        Some(self.stack(lane)?.len().saturating_sub(self.capacity(lane)?))
     }
 
     /// Empty every stack while preserving allocated storage for repeated experiments.
