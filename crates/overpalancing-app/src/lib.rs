@@ -1,33 +1,86 @@
-//! Interactive fixed-stack placement sandbox shared by desktop and mobile.
+//! Level-driven supply and fixed-stack board shared by desktop and mobile.
 use bevy::{prelude::*, window::PrimaryWindow};
+use overpalancing_core::supply::{GenerationError, GeneratorConfig, Supply};
 use overpalancing_core::{
-    Balance, Ball, BallColor, BallColors, Board, Dispenser, LANE_COUNT, SEESAW_COUNT,
+    Balance, Ball, BallColors, Board, ColorId, Dispenser, LANE_COUNT, SEESAW_COUNT,
 };
+use std::{
+    num::NonZeroU32,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
+// SplitMix64 transition described by https://prng.di.unimi.it/splitmix64.c.
+// Non-cryptographic gameplay samples; core receives samples rather than entropy.
+struct Random(u64);
+impl Random {
+    fn seeded() -> Self {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+        Self(time ^ COUNTER.fetch_add(0x9e3779b97f4a7c15, Ordering::Relaxed))
+    }
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e3779b97f4a7c15);
+        let mut value = self.0;
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
+        value ^ (value >> 31)
+    }
+}
 
 const WIDTH: f32 = 920.0;
-const HEIGHT: f32 = 1740.0;
+const HEIGHT: f32 = 2100.0;
 const LEFT: f32 = -400.0;
 const LANE: f32 = 100.0;
 const INK: Color = Color::srgb(0.85, 0.91, 0.98);
+
 #[derive(Resource)]
-struct Sandbox {
+struct Playfield {
     board: Board,
-    dispenser: Dispenser,
-    ball: Ball,
+    chute: Dispenser,
+    supply: Supply,
     offset: usize,
+    config: GeneratorConfig,
+    random: Random,
 }
-impl Default for Sandbox {
-    fn default() -> Self {
-        Self {
+impl Playfield {
+    fn new(level: NonZeroU32, mut random: Random) -> Result<Self, GenerationError> {
+        let config = GeneratorConfig::new(level);
+        let supply = Supply::new(config, &mut || random.next())?;
+        Ok(Self {
             board: Board::default(),
-            dispenser: Dispenser::default(),
-            ball: Ball {
-                weight: 1,
-                colors: BallColors::single(BallColor::Red),
-            },
+            chute: Dispenser::default(),
+            supply,
             offset: 0,
+            config,
+            random,
+        })
+    }
+    fn reset(&mut self) {
+        if let Ok(supply) = Supply::new(self.config, &mut || self.random.next()) {
+            self.supply = supply;
+            self.board.clear();
+            self.offset = 0;
         }
     }
+}
+impl Default for Playfield {
+    fn default() -> Self {
+        match Self::new(NonZeroU32::MIN, Random::seeded()) {
+            Ok(field) => field,
+            Err(error) => panic!("default level configuration failed: {error:?}"),
+        }
+    }
+}
+fn launch_level(args: &[String]) -> Result<NonZeroU32, &'static str> {
+    let Some(index) = args.iter().position(|arg| arg == "--level") else {
+        return Ok(NonZeroU32::MIN);
+    };
+    args.get(index + 1)
+        .and_then(|value| value.parse::<u32>().ok())
+        .and_then(NonZeroU32::new)
+        .ok_or("--level requires a positive integer up to 4294967295")
 }
 #[derive(Component)]
 struct Scene;
@@ -39,11 +92,24 @@ struct Smoke {
     frame: u32,
     screenshot: Option<String>,
 }
-
-/// Start the application with shared keyboard, pointer and touch controls.
+/// Start the shared level-supply view.
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
     let portrait = args.iter().any(|arg| arg == "--portrait");
+    let level = match launch_level(&args) {
+        Ok(level) => level,
+        Err(error) => {
+            eprintln!("{error}");
+            return;
+        }
+    };
+    let field = match Playfield::new(level, Random::seeded()) {
+        Ok(field) => field,
+        Err(error) => {
+            eprintln!("Invalid level configuration: {error:?}");
+            return;
+        }
+    };
     App::new()
         .insert_resource(ClearColor(Color::srgb(0.035, 0.055, 0.09)))
         .insert_resource(Smoke {
@@ -54,10 +120,10 @@ pub fn run() {
                 .find(|p| p[0] == "--screenshot")
                 .map(|p| p[1].clone()),
         })
-        .init_resource::<Sandbox>()
+        .insert_resource(field)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Overpalancing - placement sandbox".into(),
+                title: "Overpalancing - level supply".into(),
                 resolution: if portrait {
                     (540, 960).into()
                 } else {
@@ -70,7 +136,7 @@ pub fn run() {
         .add_systems(Startup, |mut commands: Commands| {
             commands.spawn((Camera2d, SceneCamera));
         })
-        .add_systems(Update, (input, fit_camera, redraw, smoke_test).chain())
+        .add_systems(Update, (pan, input, fit_camera, redraw, smoke_test).chain())
         .run();
 }
 fn view_scale(width: f32, height: f32) -> Option<f32> {
@@ -151,26 +217,80 @@ fn button(
         INK,
     );
 }
-fn color(ball: BallColor) -> Color {
-    match ball {
-        BallColor::Red => Color::srgb(0.95, 0.34, 0.38),
-        BallColor::Blue => Color::srgb(0.22, 0.73, 0.95),
-        BallColor::Yellow => Color::srgb(0.97, 0.77, 0.3),
+
+fn color(id: ColorId) -> Color {
+    match id.index() {
+        0 => Color::srgb(0.95, 0.34, 0.38),
+        1 => Color::srgb(0.22, 0.73, 0.95),
+        2 => Color::srgb(0.97, 0.77, 0.3),
+        3 => Color::srgb(0.28, 0.85, 0.46),
+        4 => Color::srgb(0.78, 0.47, 0.95),
+        5 => Color::srgb(0.98, 0.53, 0.22),
+        index => Color::hsl((index as f32 * 137.50776) % 360.0, 0.65, 0.65),
     }
 }
-fn name(ball: BallColor) -> &'static str {
-    match ball {
-        BallColor::Red => "R",
-        BallColor::Blue => "B",
-        BallColor::Yellow => "Y",
-    }
+fn names(colors: &BallColors) -> String {
+    colors
+        .iter()
+        .map(|id| format!("C{}", u64::from(id.index()) + 1))
+        .collect::<Vec<_>>()
+        .join("+")
 }
-fn names(colors: BallColors) -> String {
-    colors.iter().map(name).collect::<String>()
+fn draw_ball(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+    ball: &Ball,
+    x: f32,
+    y: f32,
+    scale: f32,
+) {
+    let radius = (20.0 * scale).clamp(22.0, 40.0);
+    let count = ball.colors.count();
+    for (sector, id) in ball.colors.iter().enumerate() {
+        if count == 1 {
+            commands.spawn((
+                Scene,
+                Mesh2d(meshes.add(Circle::new(radius))),
+                MeshMaterial2d(materials.add(color(id))),
+                Transform::from_xyz(x, y, 2.0),
+            ));
+        } else {
+            commands.spawn((
+                Scene,
+                Mesh2d(meshes.add(CircularSector::new(
+                    radius,
+                    std::f32::consts::PI / count as f32,
+                ))),
+                MeshMaterial2d(materials.add(color(id))),
+                Transform::from_xyz(x, y, 2.0).with_rotation(Quat::from_rotation_z(
+                    sector as f32 * std::f32::consts::TAU / count as f32,
+                )),
+            ));
+        }
+    }
+    let ids = ball
+        .colors
+        .iter()
+        .map(|id| (u64::from(id.index()) + 1).to_string())
+        .collect::<Vec<_>>()
+        .join("");
+    label(
+        commands,
+        format!("{}\n{}", ids, ball.weight),
+        x,
+        y,
+        20.0,
+        scale,
+        Color::BLACK,
+    );
+}
+fn platform_y(board: &Board, lane: usize) -> f32 {
+    320.0 - board.capacity(lane).unwrap_or(8) as f32 * 90.0
 }
 fn redraw(
     mut commands: Commands,
-    sandbox: Res<Sandbox>,
+    field: Res<Playfield>,
     window: Single<&Window, With<PrimaryWindow>>,
     scene: Query<Entity, With<Scene>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -178,7 +298,7 @@ fn redraw(
     mut last_size: Local<Vec2>,
 ) {
     let size = Vec2::new(window.width(), window.height());
-    if !sandbox.is_changed() && *last_size == size {
+    if !field.is_changed() && *last_size == size {
         return;
     }
     *last_size = size;
@@ -188,93 +308,164 @@ fn redraw(
     for entity in &scene {
         commands.entity(entity).despawn();
     }
-    label(&mut commands, "OVERPALANCING", 0.0, 600.0, 34.0, scale, INK);
     label(
         &mut commands,
-        "PLACEMENT SANDBOX",
+        format!("OVERPALANCING | LEVEL {}", field.config.level),
         0.0,
-        530.0,
-        22.0,
+        1000.0,
+        30.0,
         scale,
         INK,
     );
     label(
         &mut commands,
-        "Flights / matching pending",
+        "Color IDs / weight | 2 previews per lane",
         0.0,
-        460.0,
+        940.0,
         20.0,
         scale,
         INK,
     );
-    let selected = sandbox.dispenser.lane();
+    for lane in 0..LANE_COUNT {
+        let x = LEFT + (lane as f32 + 0.5) * LANE;
+        rect(
+            &mut commands,
+            x,
+            805.0,
+            88.0,
+            190.0,
+            Color::srgb(0.08, 0.14, 0.2),
+            0.0,
+        );
+        if let Some(previews) = field.supply.previews(lane) {
+            for (index, ball) in previews.iter().enumerate() {
+                draw_ball(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    ball,
+                    x,
+                    760.0 + index as f32 * 90.0,
+                    scale,
+                );
+            }
+        }
+        label(
+            &mut commands,
+            format!("{}", lane + 1),
+            x,
+            680.0,
+            20.0,
+            scale,
+            INK,
+        );
+        rect(
+            &mut commands,
+            x,
+            -40.0,
+            2.0,
+            760.0,
+            Color::srgb(0.1, 0.18, 0.25),
+            0.0,
+        );
+        let base = platform_y(&field.board, lane);
+        rect(&mut commands, x, base, 80.0, 12.0, INK, 0.0);
+        label(
+            &mut commands,
+            format!(
+                "{} {}",
+                if lane.is_multiple_of(2) { "L" } else { "R" },
+                field.board.total(lane)
+            ),
+            x,
+            -570.0,
+            20.0,
+            scale,
+            INK,
+        );
+        for (index, ball) in field
+            .board
+            .stack(lane)
+            .unwrap_or(&[])
+            .iter()
+            .skip(field.offset)
+            .take(9)
+            .enumerate()
+        {
+            draw_ball(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                ball,
+                x,
+                base + 45.0 + index as f32 * 90.0,
+                scale,
+            );
+        }
+    }
+    let x = LEFT + (field.chute.lane() as f32 + 0.5) * LANE;
+    rect(
+        &mut commands,
+        x,
+        570.0,
+        92.0,
+        100.0,
+        Color::srgb(0.4, 0.3, 0.12),
+        0.0,
+    );
+    draw_ball(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        field.supply.held(),
+        x,
+        570.0,
+        scale,
+    );
+    rect(
+        &mut commands,
+        x,
+        510.0,
+        92.0,
+        18.0,
+        Color::srgb(0.95, 0.75, 0.3),
+        0.0,
+    );
+    rect(
+        &mut commands,
+        x,
+        480.0,
+        24.0,
+        40.0,
+        Color::srgb(0.95, 0.75, 0.3),
+        0.0,
+    );
     label(
         &mut commands,
         format!(
-            "Seesaw {} | {}\nColors {} | Weight {}",
-            selected / 2 + 1,
-            if selected.is_multiple_of(2) {
-                "Left"
-            } else {
-                "Right"
-            },
-            names(sandbox.ball.colors),
-            sandbox.ball.weight
+            "Rows {}-{} | drag to inspect",
+            field.offset + 1,
+            field.offset + 9
         ),
         0.0,
-        390.0,
-        20.0,
-        scale,
-        INK,
-    );
-    let x = LEFT + (selected as f32 + 0.5) * LANE;
-    rect(
-        &mut commands,
-        x,
-        275.0,
-        80.0,
-        35.0,
-        Color::srgb(0.95, 0.75, 0.3),
-        0.0,
-    );
-    rect(
-        &mut commands,
-        x,
-        250.0,
-        22.0,
-        20.0,
-        Color::srgb(0.95, 0.75, 0.3),
-        0.0,
-    );
-    label(
-        &mut commands,
-        "Select 1-3 colors; last stays on",
-        0.0,
-        215.0,
+        410.0,
         18.0,
         scale,
         INK,
     );
     for seesaw in 0..SEESAW_COUNT {
-        let center = -300.0 + seesaw as f32 * 200.0;
-        let angle = match sandbox.board.balance(seesaw) {
-            Some(Balance::LeftHeavy) => 0.08,
-            Some(Balance::RightHeavy) => -0.08,
-            _ => 0.0,
-        };
-        rect(&mut commands, center, -90.0, 180.0, 12.0, INK, angle);
-        label(
+        let left_x = LEFT + (seesaw * 2) as f32 * LANE + LANE / 2.0;
+        let a = Vec2::new(left_x, platform_y(&field.board, seesaw * 2));
+        let b = Vec2::new(left_x + LANE, platform_y(&field.board, seesaw * 2 + 1));
+        let middle = (a + b) / 2.0;
+        rect(
             &mut commands,
-            match sandbox.board.balance(seesaw) {
-                Some(Balance::LeftHeavy) => "L down",
-                Some(Balance::RightHeavy) => "R down",
-                _ => "Equal",
-            },
-            center,
-            -205.0,
-            18.0,
-            scale,
+            middle.x,
+            middle.y,
+            (b - a).length(),
+            9.0,
             INK,
+            (b.y - a.y).atan2(b.x - a.x),
         );
         commands.spawn((
             Scene,
@@ -284,173 +475,129 @@ fn redraw(
                 Vec2::new(20.0, -20.0),
             ))),
             MeshMaterial2d(materials.add(Color::srgb(0.3, 0.45, 0.6))),
-            Transform::from_xyz(center, -115.0, 0.0),
+            Transform::from_xyz(middle.x, middle.y - 25.0, 0.0),
         ));
-    }
-    let radius = (20.0 * scale).clamp(22.0, 40.0);
-    for lane in 0..LANE_COUNT {
-        let x = LEFT + (lane as f32 + 0.5) * LANE;
-        let stack = sandbox.board.stack(lane).unwrap_or(&[]);
         label(
             &mut commands,
-            format!(
-                "{} {}",
-                if lane.is_multiple_of(2) { "L" } else { "R" },
-                sandbox.board.total(lane)
-            ),
-            x,
-            -170.0,
-            24.0,
-            scale,
-            if lane == selected {
-                Color::srgb(0.95, 0.75, 0.3)
-            } else {
-                INK
+            match field.board.balance(seesaw) {
+                Some(Balance::LeftHeavy) => "L down",
+                Some(Balance::RightHeavy) => "R down",
+                _ => "Equal",
             },
+            middle.x,
+            -625.0,
+            18.0,
+            scale,
+            INK,
         );
-        for (index, ball) in stack.iter().skip(sandbox.offset).take(3).enumerate() {
-            let y = -35.0 + index as f32 * 90.0;
-            let count = ball.colors.count();
-            for (sector, c) in ball.colors.iter().enumerate() {
-                if count == 1 {
-                    commands.spawn((
-                        Scene,
-                        Mesh2d(meshes.add(Circle::new(radius))),
-                        MeshMaterial2d(materials.add(color(c))),
-                        Transform::from_xyz(x, y, 2.0),
-                    ));
-                } else {
-                    commands.spawn((
-                        Scene,
-                        Mesh2d(meshes.add(CircularSector::new(
-                            radius,
-                            std::f32::consts::PI / count as f32,
-                        ))),
-                        MeshMaterial2d(materials.add(color(c))),
-                        Transform::from_xyz(x, y, 2.0).with_rotation(Quat::from_rotation_z(
-                            sector as f32 * std::f32::consts::TAU / count as f32,
-                        )),
-                    ));
-                }
-            }
-            label(
-                &mut commands,
-                format!("{}\n{}", names(ball.colors), ball.weight),
-                x,
-                y,
-                20.0,
-                scale,
-                Color::BLACK,
-            );
-        }
     }
-    let max = sandbox.board.stack(selected).map_or(0, <[Ball]>::len);
-    button(&mut commands, "Lower", -290.0, -280.0, 230.0, false, scale);
+    let held = field.supply.held();
     label(
         &mut commands,
-        if sandbox.offset >= max {
-            format!("Empty / {max}")
-        } else {
-            format!(
-                "{}-{} / {}",
-                sandbox.offset + 1,
-                (sandbox.offset + 3).min(max),
-                max
-            )
-        },
+        format!(
+            "Target {}{} | Held {} | Weight {}",
+            field.chute.lane() / 2 + 1,
+            if field.chute.lane().is_multiple_of(2) {
+                "L"
+            } else {
+                "R"
+            },
+            names(&held.colors),
+            held.weight
+        ),
         0.0,
-        -280.0,
+        -700.0,
         20.0,
         scale,
         INK,
     );
-    button(&mut commands, "Higher", 290.0, -280.0, 230.0, false, scale);
-    for index in 0..3 {
-        let x = -280.0 + index as f32 * 280.0;
-        button(
-            &mut commands,
-            format!("Weight {}", index + 1),
-            x,
-            -420.0,
-            260.0,
-            sandbox.ball.weight == index + 1,
-            scale,
-        );
-        let c = [BallColor::Red, BallColor::Blue, BallColor::Yellow][index as usize];
-        button(
-            &mut commands,
-            ["Red", "Blue", "Yellow"][index as usize],
-            x,
-            -550.0,
-            260.0,
-            sandbox.ball.colors.contains(c),
-            scale,
-        );
-    }
+    button(
+        &mut commands,
+        "DROP PENDING",
+        -210.0,
+        -815.0,
+        390.0,
+        false,
+        scale,
+    );
+    button(&mut commands, "RESET", 210.0, -815.0, 390.0, false, scale);
     label(
         &mut commands,
-        "Left/Right: lane | 1-3: weight\nR B Y: color | Space: place\nBackspace: reset | Up/Down: rows",
+        "Left/Right or tap: chute\nWheel / drag: inspect | Refill rule pending",
         0.0,
-        -790.0,
+        -960.0,
         18.0,
         scale,
         INK,
     );
-    button(&mut commands, "PLACE", -210.0, -680.0, 390.0, false, scale);
-    button(&mut commands, "RESET", 210.0, -680.0, 390.0, false, scale);
+}
+fn pan(
+    mut wheels: MessageReader<bevy::input::mouse::MouseWheel>,
+    touches: Res<Touches>,
+    keys: Res<ButtonInput<KeyCode>>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    mut field: ResMut<Playfield>,
+    mut carry: Local<f32>,
+) {
+    let Some(scale) = view_scale(window.width(), window.height()) else {
+        return;
+    };
+    let mut rows = 0i32;
+    for wheel in wheels.read() {
+        if wheel.y != 0.0 {
+            rows += if wheel.y > 0.0 { 1 } else { -1 };
+        }
+    }
+    if keys.just_pressed(KeyCode::ArrowUp) {
+        rows += 1;
+    }
+    if keys.just_pressed(KeyCode::ArrowDown) {
+        rows -= 1;
+    }
+    if let Some(touch) = touches
+        .iter()
+        .find(|touch| touch.distance().length() > 10.0)
+    {
+        *carry += touch.delta().y * scale;
+        while carry.abs() >= 90.0 {
+            let direction = if *carry > 0.0 { 1 } else { -1 };
+            rows += direction;
+            *carry -= direction as f32 * 90.0;
+        }
+    } else {
+        *carry = 0.0;
+    }
+    let max = (0..LANE_COUNT)
+        .filter_map(|lane| field.board.stack(lane).map(<[Ball]>::len))
+        .max()
+        .unwrap_or(0)
+        .saturating_sub(9);
+    if rows != 0 {
+        field.offset = field.offset.saturating_add_signed(rows as isize).min(max);
+    }
 }
 fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     touches: Res<Touches>,
     window: Single<&Window, With<PrimaryWindow>>,
-    mut sandbox: ResMut<Sandbox>,
+    mut field: ResMut<Playfield>,
 ) {
     if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
-        sandbox.dispenser.shift(-1);
+        field.chute.shift(-1);
     }
     if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
-        sandbox.dispenser.shift(1);
-    }
-    for (key, weight) in [
-        (KeyCode::Digit1, 1),
-        (KeyCode::Digit2, 2),
-        (KeyCode::Digit3, 3),
-    ] {
-        if keys.just_pressed(key) {
-            sandbox.ball.weight = weight;
-        }
-    }
-    for (key, c) in [
-        (KeyCode::KeyR, BallColor::Red),
-        (KeyCode::KeyB, BallColor::Blue),
-        (KeyCode::KeyY, BallColor::Yellow),
-    ] {
-        if keys.just_pressed(key) {
-            sandbox.ball.colors.toggle(c);
-        }
-    }
-    if keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Enter) {
-        place(&mut sandbox);
+        field.chute.shift(1);
     }
     if keys.just_pressed(KeyCode::Backspace) {
-        sandbox.board.clear();
-        sandbox.offset = 0;
+        field.reset();
     }
-    if keys.just_pressed(KeyCode::ArrowUp) {
-        sandbox.offset = sandbox.offset.saturating_add(1);
-    }
-    if keys.just_pressed(KeyCode::ArrowDown) {
-        sandbox.offset = sandbox.offset.saturating_sub(1);
-    }
-    // Prefer touch over synthesized mouse events, ensuring exactly one action.
     let pointer = touches
-        .iter_just_pressed()
-        .next()
+        .iter_just_released()
+        .find(|touch| touch.distance().length() <= 10.0)
         .map(|t| t.position())
         .or_else(|| {
-            mouse
-                .just_pressed(MouseButton::Left)
+            (touches.iter().next().is_none() && mouse.just_pressed(MouseButton::Left))
                 .then(|| window.cursor_position())
                 .flatten()
         });
@@ -459,46 +606,14 @@ fn input(
             (position.x - window.width() / 2.0) * scale,
             (window.height() / 2.0 - position.y) * scale,
         );
-        if (-400.0..=400.0).contains(&point.x) {
-            if (-220.0..=300.0).contains(&point.y) {
-                sandbox
-                    .dispenser
-                    .select_fraction((point.x - LEFT) / (LANE * LANE_COUNT as f32));
-            } else if (point.y + 280.0).abs() <= 55.0 {
-                if point.x < -170.0 {
-                    sandbox.offset = sandbox.offset.saturating_sub(1);
-                } else if point.x > 170.0 {
-                    sandbox.offset = sandbox.offset.saturating_add(1);
-                }
-            } else if (point.y + 420.0).abs() <= 55.0 {
-                sandbox.ball.weight =
-                    ((point.x + 420.0) / 280.0).floor().clamp(0.0, 2.0) as u32 + 1;
-            } else if (point.y + 550.0).abs() <= 55.0 {
-                sandbox.ball.colors.toggle(
-                    [BallColor::Red, BallColor::Blue, BallColor::Yellow]
-                        [((point.x + 420.0) / 280.0).floor().clamp(0.0, 2.0) as usize],
-                );
-            } else if (point.y + 680.0).abs() <= 55.0 {
-                if point.x < 0.0 {
-                    place(&mut sandbox);
-                } else {
-                    sandbox.board.clear();
-                    sandbox.offset = 0;
-                }
-            }
+        if (-400.0..=400.0).contains(&point.x) && (-640.0..=640.0).contains(&point.y) {
+            field
+                .chute
+                .select_fraction((point.x - LEFT) / (LANE * LANE_COUNT as f32));
+        } else if (point.y + 815.0).abs() <= 55.0 && point.x > 0.0 && point.x <= 400.0 {
+            field.reset();
         }
     }
-    let max = (0..LANE_COUNT)
-        .filter_map(|lane| sandbox.board.stack(lane).map(<[Ball]>::len))
-        .max()
-        .unwrap_or(0)
-        .saturating_sub(1);
-    if sandbox.offset > max {
-        sandbox.offset = max;
-    }
-}
-fn place(sandbox: &mut Sandbox) {
-    sandbox.board.place(sandbox.dispenser.lane(), sandbox.ball);
 }
 fn smoke_test(mut commands: Commands, mut smoke: ResMut<Smoke>, mut exit: MessageWriter<AppExit>) {
     if !smoke.enabled {
@@ -527,12 +642,14 @@ fn main() {
 mod tests {
     use super::*;
     use bevy::input::touch::{TouchInput, TouchPhase};
-
-    fn app() -> (App, Entity) {
+    fn input_app() -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
-            .init_resource::<Sandbox>()
-            .add_systems(Update, input);
+            .insert_resource(
+                Playfield::new(NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN), Random(7))
+                    .unwrap_or_else(|e| panic!("fixture: {e:?}")),
+            )
+            .add_systems(Update, (pan, input).chain());
         let window = app
             .world_mut()
             .spawn((
@@ -551,10 +668,10 @@ mod tests {
         keys.press(key);
         app.world_mut().run_schedule(Update);
     }
-    fn tap(app: &mut App, window: Entity, x: f32, y: f32, id: u64) {
+    fn touch(app: &mut App, window: Entity, phase: TouchPhase, x: f32, y: f32, id: u64) {
         let scale = view_scale(390.0, 844.0).unwrap_or(1.0);
         app.world_mut().write_message(TouchInput {
-            phase: TouchPhase::Started,
+            phase,
             position: Vec2::new(195.0 + x / scale, 422.0 - y / scale),
             window,
             force: None,
@@ -563,82 +680,87 @@ mod tests {
         app.update();
     }
     #[test]
-    fn keyboard_configures_places_inspects_and_resets() {
-        let (mut app, _) = app();
-        key(&mut app, KeyCode::ArrowRight);
-        key(&mut app, KeyCode::Digit3);
-        key(&mut app, KeyCode::KeyB);
-        key(&mut app, KeyCode::Space);
-        let sandbox = app.world().resource::<Sandbox>();
-        assert_eq!(sandbox.board.total(1), 3);
-        assert_eq!(sandbox.board.balance(0), Some(Balance::RightHeavy));
-        assert_eq!(
-            sandbox
-                .board
-                .stack(1)
-                .and_then(|s| s.first())
-                .map(|b| names(b.colors)),
-            Some("RB".into())
-        );
-        key(&mut app, KeyCode::KeyY);
-        key(&mut app, KeyCode::Digit2);
-        key(&mut app, KeyCode::Space);
-        let balls = app
-            .world()
-            .resource::<Sandbox>()
-            .board
-            .stack(1)
-            .unwrap_or(&[]);
-        assert_eq!(names(balls[0].colors), "RB");
-        assert_eq!(balls[0].weight, 3);
-        assert_eq!(names(balls[1].colors), "RBY");
-        assert_eq!(balls[1].weight, 2);
-        for _ in 0..4 {
-            key(&mut app, KeyCode::Enter);
-        }
-        key(&mut app, KeyCode::ArrowUp);
-        assert_eq!(app.world().resource::<Sandbox>().offset, 1);
-        assert_eq!(
-            app.world()
-                .resource::<Sandbox>()
-                .board
-                .stack(1)
-                .map(<[Ball]>::len),
-            Some(6)
-        );
-        key(&mut app, KeyCode::Backspace);
-        assert_eq!(app.world().resource::<Sandbox>().board.total(1), 0);
-        assert_eq!(app.world().resource::<Sandbox>().ball.weight, 2);
+    fn splitmix_sequence_is_repeatable_and_distinct() {
+        let mut random = Random(0);
+        assert_eq!(random.next(), 0xe220a8397b1dcdaf);
+        assert_eq!(random.next(), 0x6e789e6aa1b965f4);
     }
     #[test]
-    fn actual_portrait_touch_configures_places_once_and_resets() {
-        let (mut app, window) = app();
-        tap(&mut app, window, -280.0, -550.0, 10);
-        assert_eq!(names(app.world().resource::<Sandbox>().ball.colors), "R");
-        tap(&mut app, window, 350.0, 0.0, 1);
-        tap(&mut app, window, 0.0, -420.0, 2);
-        tap(&mut app, window, 280.0, -550.0, 3);
-        // A synthesized mouse press in the same frame must not duplicate touch.
-        app.world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Left);
-        tap(&mut app, window, -210.0, -680.0, 4);
-        let sandbox = app.world().resource::<Sandbox>();
-        assert_eq!(sandbox.dispenser.lane(), 7);
-        assert_eq!(sandbox.board.total(7), 2);
-        assert_eq!(sandbox.board.stack(7).map(<[Ball]>::len), Some(1));
-        assert_eq!(names(sandbox.ball.colors), "RY");
-        tap(&mut app, window, 0.0, -550.0, 11);
-        tap(&mut app, window, -210.0, -680.0, 12);
-        let balls = app
+    fn launch_level_accepts_full_positive_u32_range() {
+        for level in ["1", "4", "4294967295"] {
+            assert!(launch_level(&["game".into(), "--level".into(), level.into()]).is_ok());
+        }
+        for args in [
+            vec!["--level".into()],
+            vec!["--level".into(), "0".into()],
+            vec!["--level".into(), "4294967296".into()],
+        ] {
+            assert!(launch_level(&args).is_err());
+        }
+    }
+    #[test]
+    fn platform_endpoints_change_one_row_and_share_one_ceiling() {
+        let mut board = Board::default();
+        assert_eq!(platform_y(&board, 0), -400.0);
+        assert_eq!(platform_y(&board, 1), -400.0);
+        board.place(
+            0,
+            Ball {
+                weight: 2,
+                colors: BallColors::single(ColorId::RED),
+            },
+        );
+        assert_eq!(platform_y(&board, 0), -490.0);
+        assert_eq!(platform_y(&board, 1), -310.0);
+        for lane in 0..LANE_COUNT {
+            assert_eq!(
+                platform_y(&board, lane) + board.capacity(lane).unwrap_or(0) as f32 * 90.0,
+                320.0
+            );
+        }
+    }
+    #[test]
+    fn actual_keyboard_moves_held_ball_without_changing_supply() {
+        let (mut app, _) = input_app();
+        let held = app.world().resource::<Playfield>().supply.held().clone();
+        let previews = app
             .world()
-            .resource::<Sandbox>()
-            .board
-            .stack(7)
-            .unwrap_or(&[]);
-        assert_eq!(names(balls[0].colors), "RY");
-        assert_eq!(names(balls[1].colors), "RBY");
-        tap(&mut app, window, 210.0, -680.0, 5);
-        assert_eq!(app.world().resource::<Sandbox>().board.total(7), 0);
+            .resource::<Playfield>()
+            .supply
+            .previews(0)
+            .cloned();
+        for _ in 0..12 {
+            key(&mut app, KeyCode::ArrowRight);
+        }
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.chute.lane(), 7);
+        assert_eq!(field.supply.held(), &held);
+        assert_eq!(field.supply.previews(0).cloned(), previews);
+    }
+    #[test]
+    fn actual_touch_tap_moves_chute_but_drag_only_inspects() {
+        let (mut app, window) = input_app();
+        touch(&mut app, window, TouchPhase::Started, 350.0, 0.0, 1);
+        touch(&mut app, window, TouchPhase::Ended, 350.0, 0.0, 1);
+        assert_eq!(app.world().resource::<Playfield>().chute.lane(), 7);
+        {
+            let mut field = app.world_mut().resource_mut::<Playfield>();
+            for _ in 0..14 {
+                field.board.place(
+                    0,
+                    Ball {
+                        weight: 1,
+                        colors: BallColors::single(ColorId::RED),
+                    },
+                );
+            }
+        }
+        touch(&mut app, window, TouchPhase::Started, -350.0, 0.0, 2);
+        touch(&mut app, window, TouchPhase::Moved, -350.0, -200.0, 2);
+        touch(&mut app, window, TouchPhase::Ended, -350.0, -200.0, 2);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.chute.lane(), 7);
+        assert!(field.offset > 0);
+        assert_eq!(field.board.stack(0).map(<[Ball]>::len), Some(14));
     }
 }
