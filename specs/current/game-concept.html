@@ -17,10 +17,16 @@
 <ul>
 <li>The board contains four scales or seesaws.</li>
 <li>Balls have different weights and colors.</li>
+<li>Start at level 1 with one color; each level adds a color, so level L has L available colors. Generated weights range from L/2 through L, never below 1. For integer weights, the lower bound is ceil(L/2).</li>
+<li>Ball generation has a code-configurable joker probability, initially 5%. Jokers have two or three distinct available colors; level 1 has no jokers. At level 2, only two distinct colors are possible.</li>
+<li>Show two upcoming balls above each stack and keep one held ball in the chute. The held ball moves with the chute and is replaced immediately after a drop. After a drop, the front preview above the destination stack enters the chute; its next preview shifts forward and one generated ball fills the back.</li>
+<li>A lowered side has nine vertical ball positions, a balanced side eight and a raised side seven. Exceeding the available positions is Game Over, including when tilting raises an occupied stack.</li>
+<li>Upper supplies sit above each stack; the chute can place a supplied ball elsewhere. Manual Lower/Higher/Weight/Color sandbox controls are removed in the level-driven view.</li>
 <li>Balls occupy fixed stacks on either side of a seesaw; they do not roll. Balls may move between fields by being launched.</li>
 <li>Owner examples, starting with one weight-1 ball on the left: placing weight 1 on the right balances the seesaw; adding another weight-1 ball on the right lowers that side without a launch. Placing weight 2 instead launches the left weight-1 ball one field to the right; weight 3 launches it two fields to the right.</li>
 <li>Use the sum of the entire stack for the weight comparison, rather than only its top ball. When a launch occurs, only the top ball of the opposing stack flies. One field is one neighboring stack position.</li>
-<li>Flights and landings enable chain reactions. The exact launch trigger and reaction-resolution ordering remain to be specified.</li>
+<li>A launch is triggered by a full reversal from one heavy side to the opposite heavy side, without passing through a separately resolved balanced state. Use the resulting difference between complete stack totals as flight distance; launch only the top ball from the now rising side toward the heavier side. Example: left 3 versus right 2 plus an arriving 2 on the right gives 3 versus 4 and launches the top left ball one field right. Becoming balanced or leaving a balanced state does not itself count as a full reversal.</li>
+<li>Flights and landings enable chain reactions. Simultaneous reaction ordering remains to be specified.</li>
 <li>A ball flying beyond the right edge re-enters from the left, and vice versa. In split-screen play it enters the other player's board first.</li>
 <li>Five vertically stacked balls of the same color compress into one ball.</li>
 <li>A horizontal row of three or more balls of the same color clears together with balls of that same color connected horizontally and vertically.</li>
@@ -29,7 +35,7 @@
 <h2>Unresolved before gameplay implementation</h2>
 <ul>
 <li>Mass after compression and mass distribution.</li>
-<li>Exact launch trigger and distance calculation for arbitrary pre-existing stacks, including the difference between adding two individual weight-1 balls and landing one weight-2 ball; landing/reaction ordering. Stack sums, top-ball selection and the field unit are confirmed. Do not infer the remaining formula from the examples.</li>
+<li>Ordering of simultaneous landings, launches, compression and matching; placement into overflowing stacks and multiplayer scheduling. Full reversal trigger, stack-total difference, top-ball selection and neighboring-stack distance unit are confirmed.</li>
 <li>Whether multicolor matching uses shared colors, a chosen color, or another rule.</li>
 <li>Resolution ordering for simultaneous compression, matches and intersecting color groups.</li>
 <li>Board capacity, placement constraints, scoring, failure conditions and dispenser sequencing.</li>

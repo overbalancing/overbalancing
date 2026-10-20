@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+<title>Level supply view · Overpalancing</title>
+</head>
+<body>
+<header><nav aria-label="Documentation"><a href="index.html">Overpalancing documentation</a></nav></header>
+<main>
+<h1>Level supply view</h1>
+<p>This view replaces the manual placement sandbox controls with a level-driven supply and a tall playfield. It follows the composition of the owner-provided Swing reference while using original primitive graphics; no reference artwork or external assets are required.</p>
+<h2>Board composition</h2>
+<p>A compact header uses roughly the top tenth of the view for level and essential status. Eight supply columns occupy a shallow band above eight stack positions, paired into four seesaws at the bottom of a tall playfield. Each supply column shows two queued preview balls. A recognizable movable chute holds exactly one ball between the supply and playfield, with its selected destination indicated by text and a shape or outline. Placing the held ball immediately refills the chute; the first preview ball from the current destination lane becomes the new held ball, the second preview advances, and that lane receives a new second preview. Per-side accumulated weights remain near their corresponding seesaw bases.</p>
+<p>The board is the main view. Remove the sandbox weight and color configuration buttons and the Lower/Higher inspection controls. Do not replace them with invented score, timer, life or failure rules from the reference screenshot.</p>
+<h2>Level configuration</h2>
+<p>A level numbered L uses exactly L distinct palette colors. Ball weights are generated within the configured range with a minimum of one. The confirmed default joker probability is five percent and is configurable. Jokers contain two or three colors from the level palette; level one has no jokers. There are two visible preview balls per lane and one held chute ball, which refills immediately after placement. After placement, the current destination lane supplies the new held ball from its first preview; its second preview advances and a new second preview is generated. Moving the chute does not replace the already held ball.</p>
+<h2>Portrait readability</h2>
+<p>At 390-pixel viewport width, preserve all eight columns and all four seesaws. Reserve two preview rows and a distinct held-ball chute row above the playfield, then preserve room for the nine-row lowered side under the common ceiling. Use compact ball labels on two lines: a concise color identifier above the numeric weight. Target at least 32–36-pixel ball diameter with readable labels; verify actual rendered text rather than relying on nominal font sizes. Other essential labels should remain at least 14 pixels, and touch targets at least 44 pixels where practical.</p>
+<p>Assign stable numeric identifiers such as C1 and C2 to palette colors, including the selected-ball preview. Render only the colors needed by the visible scene; do not allocate an unbounded legend containing every color in level L. Distinct patterns or shapes should supplement fills when many colors are present. Multicolor balls must show their constituent identities and weight without implying an unconfirmed matching rule. Test the longest identifier and largest configured weight, not only the first colors.</p>
+<h2>Open interaction and rules</h2>
+<p>Chute movement works with keyboard, pointer and touch. Space or Enter activates Drop; the pointer/touch Drop control performs the same action. Backspace or the Reset control starts a fresh board. The playfield has a common fixed ceiling. Balanced sides have eight free ball rows; the lowered side has nine and the raised side seven. Render the platform endpoints one actual ball-row below or above the balanced height, rather than showing only a shallow rotation around unchanged endpoint heights. Exceeding the applicable nine-, eight- or seven-row capacity ends the game. A persistent GAME OVER message states the overflow reason; a brief red flash may supplement the text. Further dropping and supply consumption stop, while inspection, chute movement and Reset remain available. Reset must remain reachable by keyboard and touch. Launch rules belong to a separate feature; matching, compression and scoring are not implemented here. Retained balls must remain inspectable. Any wheel or touch-drag inspection changes the viewport only, never the stack state. Drag inspection must not also trigger a tap action. The confirmed per-side capacity and game-over rule govern overflow; the view must not silently delete balls to fit.</p>
+<h2>Verification status</h2>
+<p>On 2026-10-20, the UX engineer inspected actual Linux filled landscape and 390-pixel portrait renders, a game-over view, a reset view and a mouse-placement view. Static UX review passed: eight two-ball previews, the held chute ball, all four seesaws and totals remain visible; numeric color IDs and weights are readable at the tested level. Raised and lowered platforms have visibly different row heights. GAME OVER displays a persistent reason, Drop reads STOPPED, and Reset remains visible and reachable.</p>
+<p>The lead separately reports successful X11 placement and destination-refill checks, overflow after ten placements in one level-one stack, blocked extra placement after game over, reset and physical mouse Drop activation. The 26 reported tests include unchanged board/supply after loss, opposite-side raised overflow and touch/mouse duplicate suppression. These checks do not establish physical phone execution or readability of every possible large color identifier. Long-ID inspection remains a limitation to review as higher levels are exercised. Customer acceptance and other-platform runtime proof remain pending.</p>
+<ul><li><a href="evidence/level-supply-landscape.png">Filled landscape evidence</a></li><li><a href="evidence/level-supply-filled-390.png">Filled 390-pixel portrait evidence</a></li><li><a href="evidence/level-supply-game-over-390.png">390-pixel game-over evidence</a></li></ul>
+<p>Track decisions in <a href="questions.html">the question register</a>.</p>
+</main>
+</body>
+</html>

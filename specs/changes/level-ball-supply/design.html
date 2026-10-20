@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../../../docs/style.css">
+<title>Level supply design</title>
+<header>
+<a href="../../../docs/index.html">Documentation</a>
+</header>
+<main>
+<h1>Level supply design</h1>
+<p>Keep ball identities, palette membership, supply consumption and weight generation deterministic in core with injected random samples. Rendering and entropy seeding belong in app. Palette IDs grow with level; no arbitrary three-color level cap. Individual balls still carry at most three colors unless the owner changes that rule.</p>
+<p>Keep source supply and destination stack separate so chute redirection consumes exactly the chosen source. Source is the current destination lane: shift its two previews and generate one replacement. Exceeding the current 9/8/7 positions is Game Over and stops further drops until reset. Do not invent level progression, scoring or flight resolution in this feature.</p>
+<p>Questions 0008/0009 confirm two/three-color jokers (none on level 1), two previews per stack, one held chute ball and 9/8/7 vertical positions. Questions 0010/0011 confirm destination-lane refill and Game Over on overflow. The old sandbox guides remain historical; the new default view removes their manual configuration controls.</p>
+<nav>
+<a href="proposal.html">Proposal</a> · <a href="design.html">Design</a> · <a href="tasks.html">Tasks</a> · <a href="scenarios.html">Scenarios</a>
+</nav>
+</main>
+</html>

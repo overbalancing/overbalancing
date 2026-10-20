@@ -1,6 +1,8 @@
 //! Deterministic game domain, independent of rendering and platform services.
 #![forbid(unsafe_code)]
 
+pub mod supply;
+
 /// Number of seesaws in the game board.
 pub const SEESAW_COUNT: usize = 4;
 /// Each seesaw has two selectable sides.
@@ -30,69 +32,84 @@ impl Dispenser {
     }
 }
 
-/// Colors available in the placement sandbox.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BallColor {
-    /// Red, also identified with the letter R in presentation.
-    Red,
-    /// Blue, also identified with the letter B in presentation.
-    Blue,
-    /// Yellow, also identified with the letter Y in presentation.
-    Yellow,
+/// A zero-based color identity in a level's palette.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ColorId(u32);
+impl ColorId {
+    /// The first palette color, retained for simple fixtures.
+    pub const RED: Self = Self(0);
+    /// The second palette color, retained for simple fixtures.
+    pub const BLUE: Self = Self(1);
+    /// The third palette color, retained for simple fixtures.
+    pub const YELLOW: Self = Self(2);
+    /// Construct a palette identity; level boundaries validate membership.
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+    /// Read this color's zero-based palette index.
+    pub const fn index(self) -> u32 {
+        self.0
+    }
 }
 
-/// A nonempty subset of the sandbox palette, with no duplicate colors.
+/// One to three unique color identities in canonical ascending order.
 ///
-/// Construction and toggling preserve one to three colors. This describes a
-/// ball's appearance only; matching and joker resolution remain unspecified.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BallColors(u8);
+/// Appearance only: matching and joker resolution remain unspecified.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BallColors(Vec<ColorId>);
 impl BallColors {
-    const fn bit(color: BallColor) -> u8 {
-        match color {
-            BallColor::Red => 1,
-            BallColor::Blue => 2,
-            BallColor::Yellow => 4,
+    /// Construct a one-color ball palette.
+    pub fn single(color: ColorId) -> Self {
+        Self(vec![color])
+    }
+    /// Normalize duplicates and order, rejecting zero or more than three distinct colors.
+    pub fn new(colors: &[ColorId]) -> Option<Self> {
+        let mut unique = Vec::with_capacity(3);
+        for color in colors {
+            if !unique.contains(color) {
+                if unique.len() == 3 {
+                    return None;
+                }
+                unique.push(*color);
+            }
         }
-    }
-    /// Create a ball's single initial color.
-    pub const fn single(color: BallColor) -> Self {
-        Self(Self::bit(color))
-    }
-    /// Normalize a nonempty list, or reject an empty list.
-    pub fn new(colors: &[BallColor]) -> Option<Self> {
-        let mask = colors
-            .iter()
-            .fold(0, |mask, color| mask | Self::bit(*color));
-        (mask != 0).then_some(Self(mask))
-    }
-    /// Whether this palette contains the specified color.
-    pub const fn contains(self, color: BallColor) -> bool {
-        self.0 & Self::bit(color) != 0
-    }
-    /// Number of distinct selected colors, always between one and three.
-    pub const fn count(self) -> usize {
-        self.0.count_ones() as usize
-    }
-    /// Iterate selected colors in deterministic red, blue, yellow order.
-    pub fn iter(self) -> impl Iterator<Item = BallColor> {
-        [BallColor::Red, BallColor::Blue, BallColor::Yellow]
-            .into_iter()
-            .filter(move |color| self.contains(*color))
-    }
-    /// Toggle a color; refuse removal of the final color and return `false`.
-    pub fn toggle(&mut self, color: BallColor) -> bool {
-        let next = self.0 ^ Self::bit(color);
-        if next == 0 {
-            return false;
+        if unique.is_empty() {
+            return None;
         }
-        self.0 = next;
-        true
+        unique.sort_unstable();
+        Some(Self(unique))
+    }
+    /// Whether the ball contains a color identity.
+    pub fn contains(&self, color: ColorId) -> bool {
+        self.0.binary_search(&color).is_ok()
+    }
+    /// Number of distinct colors, always one to three.
+    pub fn count(&self) -> usize {
+        self.0.len()
+    }
+    /// Iterate identities in canonical ascending order.
+    pub fn iter(&self) -> impl Iterator<Item = ColorId> + '_ {
+        self.0.iter().copied()
+    }
+    /// Toggle a color, refusing empty or more-than-three-color results.
+    pub fn toggle(&mut self, color: ColorId) -> bool {
+        match self.0.binary_search(&color) {
+            Ok(_) if self.0.len() == 1 => false,
+            Ok(index) => {
+                self.0.remove(index);
+                true
+            }
+            Err(_) if self.0.len() == 3 => false,
+            Err(index) => {
+                self.0.insert(index, color);
+                true
+            }
+        }
     }
 }
 
 /// A configured sandbox ball; zero weight is rejected during placement.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Ball {
     /// Weight units, independent of the selected color.
     pub weight: u32,
@@ -114,7 +131,8 @@ pub enum Balance {
 /// Eight fixed stacks, ordered left to right, paired into four seesaws.
 ///
 /// Each stack is ordered bottom to top. Placement only appends a ball;
-/// flights, matching, compression and capacity rules are deliberately absent.
+/// flights, matching and compression are absent. Available positions can be
+/// queried, but raw placement does not enforce an overflow consequence.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Board {
     stacks: [Vec<Ball>; LANE_COUNT],
@@ -160,6 +178,31 @@ impl Board {
         )
     }
 
+    /// Visible capacity: heavy side nine, balanced eight, rising side seven.
+    pub fn capacity(&self, lane: usize) -> Option<usize> {
+        if lane >= LANE_COUNT {
+            return None;
+        }
+        Some(match (self.balance(lane / 2), lane.is_multiple_of(2)) {
+            (Some(Balance::Balanced), _) => 8,
+            (Some(Balance::LeftHeavy), true) | (Some(Balance::RightHeavy), false) => 9,
+            _ => 7,
+        })
+    }
+    /// Number of balls beyond visible capacity, without rejection or deletion.
+    pub fn overflow(&self, lane: usize) -> Option<usize> {
+        Some(self.stack(lane)?.len().saturating_sub(self.capacity(lane)?))
+    }
+
+    /// Whether any stack exceeds its current weight-dependent capacity.
+    ///
+    /// Capacity is re-evaluated for every side: a tilt may overflow the rising
+    /// stack without placing a ball directly onto it. This query never removes
+    /// balls; the application stops further player drops after game over.
+    pub fn is_game_over(&self) -> bool {
+        (0..LANE_COUNT).any(|lane| self.overflow(lane).is_some_and(|count| count > 0))
+    }
+
     /// Empty every stack while preserving allocated storage for repeated experiments.
     pub fn clear(&mut self) {
         for stack in &mut self.stacks {
@@ -171,7 +214,7 @@ impl Board {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn ball(weight: u32, color: BallColor) -> Ball {
+    fn ball(weight: u32, color: ColorId) -> Ball {
         Ball {
             weight,
             colors: BallColors::single(color),
@@ -179,8 +222,86 @@ mod tests {
     }
 
     #[test]
+    fn exact_capacity_is_safe_and_any_overflow_ends_the_game() {
+        let mut board = Board::default();
+        assert!(!board.is_game_over());
+        for lane in [0, 1] {
+            for _ in 0..8 {
+                assert!(board.place(lane, ball(1, ColorId::RED)));
+            }
+        }
+        assert_eq!(board.capacity(0), Some(8));
+        assert_eq!(board.overflow(0), Some(0));
+        assert!(!board.is_game_over());
+        // Right becomes heavier; the untouched left side shrinks from eight to seven.
+        assert!(board.place(1, ball(1, ColorId::BLUE)));
+        assert_eq!(board.capacity(1), Some(9));
+        assert_eq!(board.overflow(1), Some(0));
+        assert_eq!(board.capacity(0), Some(7));
+        assert_eq!(board.overflow(0), Some(1));
+        assert!(board.is_game_over());
+        assert_eq!(board.stack(0).map(<[Ball]>::len), Some(8));
+        board.clear();
+        assert!(!board.is_game_over());
+    }
+
+    #[test]
+    fn heavy_capacity_nine_and_light_capacity_seven_allow_the_exact_boundary() {
+        let mut board = Board::default();
+        for _ in 0..9 {
+            assert!(board.place(0, ball(2, ColorId::RED)));
+        }
+        for _ in 0..7 {
+            assert!(board.place(1, ball(1, ColorId::BLUE)));
+        }
+        assert_eq!(board.overflow(0), Some(0));
+        assert_eq!(board.overflow(1), Some(0));
+        assert!(!board.is_game_over());
+        assert!(board.place(0, ball(1, ColorId::RED)));
+        assert!(board.is_game_over());
+    }
+
+    #[test]
+    fn arbitrary_palette_ids_are_owned_canonical_and_bounded() {
+        let Some(mut colors) = BallColors::new(&[
+            ColorId::new(u32::MAX),
+            ColorId::new(50),
+            ColorId::new(7),
+            ColorId::new(50),
+        ]) else {
+            panic!("valid colors");
+        };
+        assert_eq!(
+            colors.iter().map(ColorId::index).collect::<Vec<_>>(),
+            vec![7, 50, u32::MAX]
+        );
+        assert!(!colors.toggle(ColorId::new(99)));
+        assert_eq!(
+            BallColors::new(&[
+                ColorId::new(0),
+                ColorId::new(1),
+                ColorId::new(2),
+                ColorId::new(3)
+            ]),
+            None
+        );
+        let original = colors.clone();
+        assert!(colors.toggle(ColorId::new(50)));
+        assert!(original.contains(ColorId::new(50)));
+        assert!(!colors.contains(ColorId::new(50)));
+        let original_ball = Ball {
+            weight: 9,
+            colors: original,
+        };
+        let mut cloned_ball = original_ball.clone();
+        assert!(cloned_ball.colors.toggle(ColorId::new(7)));
+        assert_eq!(original_ball.colors.count(), 3);
+        assert_eq!(cloned_ball.weight, original_ball.weight);
+    }
+
+    #[test]
     fn all_nonempty_palettes_have_canonical_order_and_no_duplicates() {
-        let palette = [BallColor::Red, BallColor::Blue, BallColor::Yellow];
+        let palette = [ColorId::RED, ColorId::BLUE, ColorId::YELLOW];
         assert_eq!(BallColors::new(&[]), None);
         for mask in 1u8..8 {
             let selected: Vec<_> = palette
@@ -204,32 +325,31 @@ mod tests {
 
     #[test]
     fn toggling_never_removes_the_last_color() {
-        let mut colors = BallColors::single(BallColor::Red);
-        assert!(!colors.toggle(BallColor::Red));
-        assert_eq!(colors, BallColors::single(BallColor::Red));
-        assert!(colors.toggle(BallColor::Yellow));
-        assert!(colors.toggle(BallColor::Blue));
+        let mut colors = BallColors::single(ColorId::RED);
+        assert!(!colors.toggle(ColorId::RED));
+        assert_eq!(colors, BallColors::single(ColorId::RED));
+        assert!(colors.toggle(ColorId::YELLOW));
+        assert!(colors.toggle(ColorId::BLUE));
         assert_eq!(colors.count(), 3);
-        assert!(colors.toggle(BallColor::Red));
-        assert!(colors.toggle(BallColor::Blue));
-        assert!(!colors.toggle(BallColor::Yellow));
-        assert_eq!(colors, BallColors::single(BallColor::Yellow));
+        assert!(colors.toggle(ColorId::RED));
+        assert!(colors.toggle(ColorId::BLUE));
+        assert!(!colors.toggle(ColorId::YELLOW));
+        assert_eq!(colors, BallColors::single(ColorId::YELLOW));
     }
 
     #[test]
     fn multicolor_placement_preserves_palette_and_does_not_multiply_weight() {
-        let Some(colors) = BallColors::new(&[BallColor::Yellow, BallColor::Red, BallColor::Blue])
-        else {
+        let Some(colors) = BallColors::new(&[ColorId::YELLOW, ColorId::RED, ColorId::BLUE]) else {
             panic!("nonempty palette");
         };
         let multi = Ball { weight: 3, colors };
         let mut board = Board::default();
-        assert!(board.place(0, multi));
-        assert!(board.place(0, multi));
-        assert!(board.place(1, ball(6, BallColor::Blue)));
+        assert!(board.place(0, multi.clone()));
+        assert!(board.place(0, multi.clone()));
+        assert!(board.place(1, ball(6, ColorId::BLUE)));
         assert_eq!(board.total(0), 6);
         assert_eq!(board.balance(0), Some(Balance::Balanced));
-        assert_eq!(board.stack(0), Some([multi, multi].as_slice()));
+        assert_eq!(board.stack(0), Some([multi.clone(), multi].as_slice()));
         // Neither matching colors nor three-color appearance resolves any ball.
         assert_eq!(board.stack(1).map(<[Ball]>::len), Some(1));
     }
@@ -237,10 +357,10 @@ mod tests {
     #[test]
     fn placement_preserves_order_weight_color_and_other_stacks() {
         let mut board = Board::default();
-        let first = ball(2, BallColor::Red);
-        let second = ball(3, BallColor::Blue);
-        assert!(board.place(5, first));
-        assert!(board.place(5, second));
+        let first = ball(2, ColorId::RED);
+        let second = ball(3, ColorId::BLUE);
+        assert!(board.place(5, first.clone()));
+        assert!(board.place(5, second.clone()));
         assert_eq!(board.stack(5), Some([first, second].as_slice()));
         assert_eq!(board.total(5), 5);
         for lane in [0, 1, 2, 3, 4, 6, 7] {
@@ -251,11 +371,11 @@ mod tests {
     #[test]
     fn invalid_placement_is_atomic_and_indices_are_bounded() {
         let mut board = Board::default();
-        assert!(board.place(0, ball(1, BallColor::Yellow)));
+        assert!(board.place(0, ball(1, ColorId::YELLOW)));
         let before = board.clone();
-        assert!(!board.place(LANE_COUNT, ball(1, BallColor::Red)));
-        assert!(!board.place(usize::MAX, ball(1, BallColor::Red)));
-        assert!(!board.place(0, ball(0, BallColor::Blue)));
+        assert!(!board.place(LANE_COUNT, ball(1, ColorId::RED)));
+        assert!(!board.place(usize::MAX, ball(1, ColorId::RED)));
+        assert!(!board.place(0, ball(0, ColorId::BLUE)));
         assert_eq!(board, before);
         assert_eq!(board.stack(usize::MAX), None);
         assert_eq!(board.total(usize::MAX), 0);
@@ -266,9 +386,9 @@ mod tests {
     fn cited_weight_examples_only_change_balance_never_remove_balls() {
         for right_weights in [vec![1], vec![1, 1], vec![2], vec![3]] {
             let mut board = Board::default();
-            assert!(board.place(0, ball(1, BallColor::Red)));
+            assert!(board.place(0, ball(1, ColorId::RED)));
             for weight in &right_weights {
-                assert!(board.place(1, ball(*weight, BallColor::Blue)));
+                assert!(board.place(1, ball(*weight, ColorId::BLUE)));
             }
             assert_eq!(
                 board.balance(0),
@@ -286,15 +406,15 @@ mod tests {
     #[test]
     fn balance_is_symmetric_and_totals_exceed_u32_without_wrapping() {
         let mut board = Board::default();
-        assert!(board.place(2, ball(u32::MAX, BallColor::Red)));
-        assert!(board.place(2, ball(u32::MAX, BallColor::Yellow)));
+        assert!(board.place(2, ball(u32::MAX, ColorId::RED)));
+        assert!(board.place(2, ball(u32::MAX, ColorId::YELLOW)));
         assert_eq!(board.total(2), u64::from(u32::MAX) * 2);
         assert_eq!(board.balance(1), Some(Balance::LeftHeavy));
         for _ in 0..2 {
-            assert!(board.place(3, ball(u32::MAX, BallColor::Blue)));
+            assert!(board.place(3, ball(u32::MAX, ColorId::BLUE)));
         }
         assert_eq!(board.balance(1), Some(Balance::Balanced));
-        assert!(board.place(3, ball(1, BallColor::Red)));
+        assert!(board.place(3, ball(1, ColorId::RED)));
         assert_eq!(board.balance(1), Some(Balance::RightHeavy));
         assert_eq!(board.balance(0), Some(Balance::Balanced));
     }
@@ -303,14 +423,14 @@ mod tests {
     fn clear_resets_every_stack_and_allows_another_experiment() {
         let mut board = Board::default();
         for lane in 0..LANE_COUNT {
-            assert!(board.place(lane, ball(lane as u32 + 1, BallColor::Yellow)));
+            assert!(board.place(lane, ball(lane as u32 + 1, ColorId::YELLOW)));
         }
         board.clear();
         assert_eq!(board, Board::default());
         for seesaw in 0..SEESAW_COUNT {
             assert_eq!(board.balance(seesaw), Some(Balance::Balanced));
         }
-        assert!(board.place(7, ball(3, BallColor::Red)));
+        assert!(board.place(7, ball(3, ColorId::RED)));
         assert_eq!(board.total(7), 3);
     }
 

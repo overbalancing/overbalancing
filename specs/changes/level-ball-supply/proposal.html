@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../../../docs/style.css">
+<title>Level-driven ball supply</title>
+<header>
+<a href="../../../docs/index.html">Documentation</a>
+</header>
+<main>
+<h1>Level-driven ball supply</h1>
+<p>Status: implemented and locally verified; platform CI and owner review pending.</p>
+<p>Replace manual sandbox weight/color and Lower/Higher controls with a reference-inspired playfield: eight upper ball supplies, a movable chute and four seesaws with eight fixed stack positions.</p>
+<p>Level L introduces exactly L available colors. Ball weights are random between L/2 and L inclusive, never less than 1. Joker probability is a code-level setting, initially 5%. Use ceil(L/2) for integer weights. Level 1 has no jokers; level 2 can only use two joker colors. Show two previews per stack plus one held chute ball. Lowered/balanced/raised sides expose 9/8/7 positions; destination-lane refill and Game Over on overflow are confirmed in questions 0010/0011.</p>
+<p>Use primitive original graphics; the supplied game screenshot informs composition only. Flight behavior is confirmed in question 0007 and is a separate implementation feature.</p>
+<nav>
+<a href="proposal.html">Proposal</a> · <a href="design.html">Design</a> · <a href="tasks.html">Tasks</a> · <a href="scenarios.html">Scenarios</a>
+</nav>
+</main>
+</html>
