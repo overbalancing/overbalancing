@@ -7,17 +7,17 @@ else
   simulator_target=x86_64-apple-ios
 fi
 rustup target add "$simulator_target"
-cargo build --locked -p overpalancing-app --bin overpalancing --target "$simulator_target"
-app=target/ios-simulator/Overpalancing.app
+cargo build --locked -p overbalancing-app --bin overbalancing --target "$simulator_target"
+app=target/ios-simulator/Overbalancing.app
 mkdir -p "$app"
-cp "target/$simulator_target/debug/overpalancing" "$app/Overpalancing"
+cp "target/$simulator_target/debug/overbalancing" "$app/Overbalancing"
 cat > "$app/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>Overpalancing</string>
-<key>CFBundleIdentifier</key><string>dev.overpalancing.game</string>
-<key>CFBundleName</key><string>Overpalancing</string>
+<key>CFBundleExecutable</key><string>Overbalancing</string>
+<key>CFBundleIdentifier</key><string>dev.overbalancing.game</string>
+<key>CFBundleName</key><string>Overbalancing</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
@@ -28,5 +28,5 @@ cat > "$app/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 codesign --force --sign - "$app"
-tar -czf target/ios-simulator/Overpalancing.app.tar.gz -C target/ios-simulator Overpalancing.app
+tar -czf target/ios-simulator/Overbalancing.app.tar.gz -C target/ios-simulator Overbalancing.app
 echo "Simulator application: $app"

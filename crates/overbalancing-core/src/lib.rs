@@ -56,12 +56,14 @@ impl ColorId {
     }
 }
 
-/// One to three unique color identities in canonical ascending order.
-///
-/// Appearance only: matching and joker resolution remain unspecified.
+/// Canonical palette: one to three colors for ordinary balls, empty for specials.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BallColors(Vec<ColorId>);
 impl BallColors {
+    /// Empty palette reserved for colorless special balls.
+    pub fn none() -> Self {
+        Self(Vec::new())
+    }
     /// Construct a one-color ball palette.
     pub fn single(color: ColorId) -> Self {
         Self(vec![color])
@@ -87,7 +89,7 @@ impl BallColors {
     pub fn contains(&self, color: ColorId) -> bool {
         self.0.binary_search(&color).is_ok()
     }
-    /// Number of distinct colors, always one to three.
+    /// Number of distinct colors, zero for colorless special balls.
     pub fn count(&self) -> usize {
         self.0.len()
     }
@@ -112,13 +114,83 @@ impl BallColors {
     }
 }
 
-/// A configured sandbox ball; zero weight is rejected during placement.
+/// A game ball with kind-specific mass and color invariants.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Ball {
+    /// Rules identity, independent of visual presentation.
+    pub kind: BallKind,
     /// Weight units, independent of the selected color.
     pub weight: u32,
-    /// One to three distinct selected colors.
+    /// One to three ordinary colors; empty for special balls.
     pub colors: BallColors,
+}
+
+/// Deterministic identity of an ordinary or special ball.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BallKind {
+    /// Colored ordinary ball, including multicolor jokers.
+    Normal,
+    /// Weightless earned level reward.
+    SilverStar,
+    /// Two vertically combined silver stars.
+    GoldStar,
+    /// Weight-ten contact explosive.
+    Bomb,
+    /// Inert weight-five obstacle.
+    Stone,
+}
+impl Ball {
+    /// Construct an ordinary colored ball; placement still validates its weight.
+    pub fn normal(weight: u32, colors: BallColors) -> Self {
+        Self {
+            kind: BallKind::Normal,
+            weight,
+            colors,
+        }
+    }
+    /// Create a weightless silver star.
+    pub fn silver_star() -> Self {
+        Self {
+            kind: BallKind::SilverStar,
+            weight: 0,
+            colors: BallColors::none(),
+        }
+    }
+    /// Create a weightless golden star.
+    pub fn gold_star() -> Self {
+        Self {
+            kind: BallKind::GoldStar,
+            weight: 0,
+            colors: BallColors::none(),
+        }
+    }
+    /// Create a contact bomb with the exceptional weight of ten.
+    pub fn bomb() -> Self {
+        Self {
+            kind: BallKind::Bomb,
+            weight: 10,
+            colors: BallColors::none(),
+        }
+    }
+    /// Create an inert weight-five obstacle.
+    pub fn stone() -> Self {
+        Self {
+            kind: BallKind::Stone,
+            weight: 5,
+            colors: BallColors::none(),
+        }
+    }
+    /// Validate kind-specific mass and palette invariants.
+    pub fn is_valid(&self) -> bool {
+        match self.kind {
+            BallKind::Normal => self.weight > 0 && (1..=3).contains(&self.colors.count()),
+            BallKind::SilverStar | BallKind::GoldStar => {
+                self.weight == 0 && self.colors.count() == 0
+            }
+            BallKind::Bomb => self.weight == 10 && self.colors.count() == 0,
+            BallKind::Stone => self.weight == 5 && self.colors.count() == 0,
+        }
+    }
 }
 
 /// Relative weight of the two sides, without any launch implication.
@@ -134,12 +206,12 @@ pub enum Balance {
 
 /// Eight fixed stacks, ordered left to right, paired into four seesaws.
 ///
-/// Each stack is ordered bottom to top. Placement only appends a ball;
-/// flights, matching and compression are absent. Available positions can be
-/// queried, but raw placement does not enforce an overflow consequence.
+/// Each stack is ordered bottom to top. Raw placement only appends a valid ball;
+/// use the resolution module for landing effects. Session expansions extend all lanes.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Board {
     stacks: [Vec<Ball>; LANE_COUNT],
+    bonus_rows: usize,
 }
 impl Board {
     /// Inspect a stack bottom to top, or return `None` for an invalid lane.
@@ -147,9 +219,9 @@ impl Board {
         self.stacks.get(lane).map(Vec::as_slice)
     }
 
-    /// Append a positive-weight ball to a valid lane; otherwise leave the board unchanged.
+    /// Append a kind-valid ball to a valid lane; otherwise leave the board unchanged.
     pub fn place(&mut self, lane: usize, ball: Ball) -> bool {
-        if ball.weight == 0 {
+        if !ball.is_valid() {
             return false;
         }
         let Some(stack) = self.stacks.get_mut(lane) else {
@@ -187,11 +259,22 @@ impl Board {
         if lane >= LANE_COUNT {
             return None;
         }
-        Some(match (self.balance(lane / 2), lane.is_multiple_of(2)) {
-            (Some(Balance::Balanced), _) => 8,
-            (Some(Balance::LeftHeavy), true) | (Some(Balance::RightHeavy), false) => 9,
-            _ => 7,
-        })
+        Some(
+            self.bonus_rows
+                + match (self.balance(lane / 2), lane.is_multiple_of(2)) {
+                    (Some(Balance::Balanced), _) => 8,
+                    (Some(Balance::LeftHeavy), true) | (Some(Balance::RightHeavy), false) => 9,
+                    _ => 7,
+                },
+        )
+    }
+    /// Permanent rows earned this session, capped at three.
+    pub const fn bonus_rows(&self) -> usize {
+        self.bonus_rows
+    }
+    /// Whether all three permanent row expansions have been earned.
+    pub const fn expansion_achievement(&self) -> bool {
+        self.bonus_rows == 3
     }
     /// Number of balls beyond visible capacity, without rejection or deletion.
     pub fn overflow(&self, lane: usize) -> Option<usize> {
@@ -207,8 +290,9 @@ impl Board {
         (0..LANE_COUNT).any(|lane| self.overflow(lane).is_some_and(|count| count > 0))
     }
 
-    /// Empty every stack while preserving allocated storage for repeated experiments.
+    /// Begin a fresh session: empty stacks and reset earned expansions.
     pub fn clear(&mut self) {
+        self.bonus_rows = 0;
         for stack in &mut self.stacks {
             stack.clear();
         }
@@ -220,6 +304,7 @@ mod tests {
     use super::*;
     fn ball(weight: u32, color: ColorId) -> Ball {
         Ball {
+            kind: crate::BallKind::Normal,
             weight,
             colors: BallColors::single(color),
         }
@@ -294,6 +379,7 @@ mod tests {
         assert!(original.contains(ColorId::new(50)));
         assert!(!colors.contains(ColorId::new(50)));
         let original_ball = Ball {
+            kind: crate::BallKind::Normal,
             weight: 9,
             colors: original,
         };
@@ -346,7 +432,11 @@ mod tests {
         let Some(colors) = BallColors::new(&[ColorId::YELLOW, ColorId::RED, ColorId::BLUE]) else {
             panic!("nonempty palette");
         };
-        let multi = Ball { weight: 3, colors };
+        let multi = Ball {
+            kind: crate::BallKind::Normal,
+            weight: 3,
+            colors,
+        };
         let mut board = Board::default();
         assert!(board.place(0, multi.clone()));
         assert!(board.place(0, multi.clone()));

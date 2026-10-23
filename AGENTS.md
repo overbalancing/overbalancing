@@ -1,6 +1,6 @@
 # Project
 
-Overpalancing is a Rust and Bevy puzzle game inspired by Swing (1997).
+Overbalancing is a Rust and Bevy puzzle game inspired by Swing (1997).
 The repository directory and GitHub organization are named `overbalancing`.
 Use English for code, UI, documentation, commits and PRs; speak German to the customer.
 All authored specifications, ADRs, role guides and documentation use HTML.
@@ -54,8 +54,8 @@ validation and remaining platform proof. Do not claim device runs from cross-com
 
 # Engineering and verification
 
-Keep deterministic game rules in `overpalancing-core`, with no Bevy, I/O or platform dependencies.
-Keep rendering, input and platform entry points in `overpalancing-app`.
+Keep deterministic game rules in `overbalancing-core`, with no Bevy, I/O or platform dependencies.
+Keep rendering, input and platform entry points in `overbalancing-app`.
 Prefer functions and concrete data over speculative abstractions; add no physics engine without a reviewed need.
 No copied reference-project code or assets. Core forbids unsafe code; platform exceptions require an ADR.
 Use stable Rust pinned in rust-toolchain.toml; MSRV is checked only in scheduled nightly CI, not every PR.

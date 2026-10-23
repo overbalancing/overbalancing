@@ -3457,15 +3457,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "overpalancing-app"
+name = "overbalancing-app"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "overpalancing-core",
+ "overbalancing-core",
 ]
 
 [[package]]
-name = "overpalancing-core"
+name = "overbalancing-core"
 version = "0.1.0"
 
 [[package]]

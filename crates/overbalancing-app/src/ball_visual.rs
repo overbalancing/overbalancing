@@ -1,7 +1,7 @@
 //! Original, procedural color cues shared by stationary and moving balls.
 //! The first six colors stay plain; later colors repeat a finite twelve-cue set.
 use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology, prelude::*};
-use overpalancing_core::{Ball, ColorId};
+use overbalancing_core::{Ball, BallKind, ColorId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Symbol {
@@ -77,6 +77,7 @@ pub(super) struct Visual {
     weight: String,
     font: f32,
     ink: Color,
+    kind: BallKind,
 }
 
 fn rotate(point: Vec2, angle: f32) -> Vec2 {
@@ -229,12 +230,105 @@ fn marker_points(symbol: Symbol, radius: f32, count: usize, angle: f32, scale: f
     .map(|p| rotate(p, angle))
     .collect()
 }
+#[derive(Component, Debug, PartialEq, Eq)]
+pub(super) struct BallAppearance(pub BallKind);
+fn special(
+    ball: &Ball,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+    scale: f32,
+) -> Visual {
+    let radius = radius(scale);
+    let mut parts = Vec::new();
+    let mut add = |mesh: Mesh, color: Color, z: f32| {
+        parts.push(Part {
+            mesh: meshes.add(mesh),
+            material: materials.add(color),
+            transform: Transform::from_xyz(0.0, 0.0, z),
+            marking: None,
+        });
+    };
+    let ink = match ball.kind {
+        BallKind::SilverStar | BallKind::GoldStar => {
+            let points = symbol_points(Symbol::Star)
+                .into_iter()
+                .map(|p| p * radius * 0.96)
+                .collect::<Vec<_>>();
+            add(
+                polygon_mesh(&points),
+                if ball.kind == BallKind::SilverStar {
+                    Color::srgb(0.76, 0.82, 0.9)
+                } else {
+                    Color::srgb(1.0, 0.73, 0.16)
+                },
+                0.0,
+            );
+            Color::BLACK
+        }
+        BallKind::Bomb => {
+            add(
+                Circle::new(radius * 0.82).mesh().build(),
+                Color::srgb(0.1, 0.12, 0.15),
+                0.0,
+            );
+            let fuse = [
+                Vec2::new(0.05, 0.66),
+                Vec2::new(0.18, 0.63),
+                Vec2::new(0.43, 0.98),
+                Vec2::new(0.29, 1.02),
+            ]
+            .map(|p| p * radius);
+            add(polygon_mesh(&fuse), Color::srgb(0.88, 0.65, 0.32), 1.0);
+            let spark = [
+                Vec2::new(0.23, 1.00),
+                Vec2::new(0.48, 0.90),
+                Vec2::new(0.42, 1.07),
+            ]
+            .map(|p| p * radius);
+            add(polygon_mesh(&spark), Color::srgb(1.0, 0.4, 0.12), 2.0);
+            Color::WHITE
+        }
+        BallKind::Stone => {
+            let rock = [
+                Vec2::new(-0.85, -0.4),
+                Vec2::new(-0.5, -0.82),
+                Vec2::new(0.5, -0.8),
+                Vec2::new(0.9, -0.1),
+                Vec2::new(0.55, 0.7),
+                Vec2::new(-0.1, 0.94),
+                Vec2::new(-0.8, 0.48),
+            ]
+            .map(|p| p * radius);
+            add(polygon_mesh(&rock), Color::srgb(0.51, 0.56, 0.6), 0.0);
+            let face = [
+                Vec2::new(-0.65, 0.3),
+                Vec2::new(-0.08, 0.78),
+                Vec2::new(0.40, 0.58),
+                Vec2::new(0.08, 0.22),
+            ]
+            .map(|p| p * radius);
+            add(polygon_mesh(&face), Color::srgb(0.65, 0.69, 0.72), 1.0);
+            Color::BLACK
+        }
+        BallKind::Normal => Color::BLACK,
+    };
+    Visual {
+        parts,
+        weight: ball.weight.to_string(),
+        font: (14.0 * scale).max(20.0),
+        ink,
+        kind: ball.kind,
+    }
+}
 pub(super) fn build(
     ball: &Ball,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<ColorMaterial>,
     scale: f32,
 ) -> Visual {
+    if ball.kind != BallKind::Normal {
+        return special(ball, meshes, materials, scale);
+    }
     let radius = radius(scale);
     let font = (14.0 * scale).max(20.0);
     let weight = ball.weight.to_string();
@@ -289,6 +383,7 @@ pub(super) fn build(
         weight,
         font,
         ink: weight_ink(ball),
+        kind: ball.kind,
     }
 }
 pub(super) fn spawn(children: &mut ChildSpawnerCommands<'_>, visual: Visual) {
@@ -303,6 +398,7 @@ pub(super) fn spawn(children: &mut ChildSpawnerCommands<'_>, visual: Visual) {
         }
     }
     children.spawn((
+        BallAppearance(visual.kind),
         Text2d::new(visual.weight),
         TextFont {
             font_size: bevy::text::FontSize::Px(visual.font),
@@ -360,8 +456,9 @@ mod tests {
         let mut materials = Assets::<ColorMaterial>::default();
         for id in 0..6 {
             let ball = Ball {
+                kind: BallKind::Normal,
                 weight: 12,
-                colors: overpalancing_core::BallColors::single(ColorId::new(id)),
+                colors: overbalancing_core::BallColors::single(ColorId::new(id)),
             };
             let visual = build(&ball, &mut meshes, &mut materials, 2.4);
             assert_eq!(visual.parts.len(), 1);

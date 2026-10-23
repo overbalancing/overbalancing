@@ -7,14 +7,14 @@
 <body>
 <header>
 <nav aria-label="Project documentation">
-<a href="../docs/index.html">Overpalancing documentation</a> · <a href="../adr/index.html">Decisions</a> · <a href="../specs/index.html">Specifications</a>
+<a href="../docs/index.html">Overbalancing documentation</a> · <a href="../adr/index.html">Decisions</a> · <a href="../specs/index.html">Specifications</a>
 </nav>
 </header>
 <main>
 <h1>ADR 0001: Rust and Bevy</h1>
 <p>Status: accepted. Created: 2026-10-18. Accepted by Marc-Hendric Lühr on 2026-10-19. The owner must merge this acceptance change.</p>
 <h2>Context</h2>
-<p>Overpalancing is a commercial game, initially developed on Linux with Windows, macOS, iOS and Android build coverage. The owner has selected Rust and Bevy; this proposal records the implementation consequences without claiming ADR approval.</p>
+<p>Overbalancing is a commercial game, initially developed on Linux with Windows, macOS, iOS and Android build coverage. The owner has selected Rust and Bevy; this proposal records the implementation consequences without claiming ADR approval.</p>
 <h2>Decision</h2>
 <p>Use Bevy 0.20.0 and Rust 1.99.0 stable, with an initial MSRV of 1.97.1 matching Bevy. Nightly means a scheduled nightly MSRV workflow, not the nightly Rust compiler. Pin the toolchain and dependency lockfile. Separate a dependency-free deterministic domain crate from the Bevy application crate. Share application startup across desktop and mobile; build the mobile library as a cdylib with Bevy's bevy_main entrypoint.</p>
 <p>Select explicit 2D rendering, windowing and font features. Linux enables X11 and Wayland; Android uses native-activity. Use Bevy primitives for the initial view, with no external art or physics dependency. Prototype rendering must not implement undocumented game rules.</p>

@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Development and review · Overpalancing</title>
+<title>Development and review · Overbalancing</title>
 <link rel="stylesheet" href="../docs/style.css">
 </head>
 <body>
 <header>
-<a href="../docs/index.html">Overpalancing documentation</a>
+<a href="../docs/index.html">Overbalancing documentation</a>
 </header>
 <main>
 <h1>Development and review</h1>
@@ -18,7 +18,7 @@
 <code>sudo apt-get update
 sudo apt-get install build-essential pkg-config libudev-dev libx11-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libvulkan1 mesa-vulkan-drivers
 rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
-cargo run --locked -p overpalancing-app --bin overpalancing</code>
+cargo run --locked -p overbalancing-app --bin overbalancing</code>
 </pre>
 <p>Run Cargo commands from the repository root in a graphical Linux session with Vulkan support. The pinned development toolchain is stable Rust 1.99.0; the minimum supported Rust version (MSRV) is stable 1.97.1. CI checks that MSRV on a nightly schedule.</p>
 <h2>First-view controls</h2>
@@ -51,6 +51,6 @@ cargo run --locked -p overpalancing-app --bin overpalancing</code>
 <p>
 <code>CODEOWNERS</code> and the PR check assist review. They cannot identify whether an API call using the owner's account was made by the owner or an agent; the lead must never merge ADR approval transitions. Configure branch rules with care: GitHub does not allow an author to approve their own PR.</p>
 </main>
-<footer>Overpalancing · Source-available game</footer>
+<footer>Overbalancing · Source-available game</footer>
 </body>
 </html>

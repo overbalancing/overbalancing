@@ -48,14 +48,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libudev-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 mesa-vulkan-drivers xvfb xauth
       - run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - run: cargo build --locked -p overpalancing-app --bin overpalancing
+      - run: cargo build --locked -p overbalancing-app --bin overbalancing
       - name: Render the first view in landscape and portrait
         if: runner.os == 'Linux'
         timeout-minutes: 2
         run: |
           mkdir -p target/render-smoke
-          xvfb-run -a -s "-screen 0 1280x1024x24" env WGPU_BACKEND=vulkan target/debug/overpalancing --smoke-test --screenshot target/render-smoke/landscape.png
-          xvfb-run -a -s "-screen 0 1280x1024x24" env WGPU_BACKEND=vulkan target/debug/overpalancing --smoke-test --portrait --screenshot target/render-smoke/portrait.png
+          xvfb-run -a -s "-screen 0 1280x1024x24" env WGPU_BACKEND=vulkan target/debug/overbalancing --smoke-test --screenshot target/render-smoke/landscape.png
+          xvfb-run -a -s "-screen 0 1280x1024x24" env WGPU_BACKEND=vulkan target/debug/overbalancing --smoke-test --portrait --screenshot target/render-smoke/portrait.png
           test -s target/render-smoke/landscape.png
           test -s target/render-smoke/portrait.png
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -67,13 +67,13 @@ jobs:
       - name: Archive native executable with permissions
         shell: bash
         run: |
-          binary=overpalancing
-          if [[ "$RUNNER_OS" == Windows ]]; then binary=overpalancing.exe; fi
-          tar -czf "target/overpalancing-$RUNNER_OS.tar.gz" -C target/debug "$binary"
+          binary=overbalancing
+          if [[ "$RUNNER_OS" == Windows ]]; then binary=overbalancing.exe; fi
+          tar -czf "target/overbalancing-$RUNNER_OS.tar.gz" -C target/debug "$binary"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-${{ runner.os }}
-          path: target/overpalancing-*.tar.gz
+          path: target/overbalancing-*.tar.gz
           if-no-files-found: error
   android:
     runs-on: ubuntu-latest
@@ -90,7 +90,7 @@ jobs:
             export ANDROID_NDK_ROOT
           fi
           cargo fetch --locked
-          CARGO_NET_OFFLINE=true cargo apk build -p overpalancing-app --lib --target aarch64-linux-android
+          CARGO_NET_OFFLINE=true cargo apk build -p overbalancing-app --lib --target aarch64-linux-android
           git diff --exit-code -- Cargo.lock
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -103,17 +103,17 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - run: cargo build --locked -p overpalancing-app --bin overpalancing --target aarch64-apple-ios
+      - run: cargo build --locked -p overbalancing-app --bin overbalancing --target aarch64-apple-ios
       - run: bash scripts/build_ios_simulator.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-unsigned-device-executable
-          path: target/aarch64-apple-ios/debug/overpalancing
+          path: target/aarch64-apple-ios/debug/overbalancing
           if-no-files-found: error
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-simulator-app
-          path: target/ios-simulator/Overpalancing.app.tar.gz
+          path: target/ios-simulator/Overbalancing.app.tar.gz
           if-no-files-found: error
       - name: Boot, install and launch on iOS simulator
         timeout-minutes: 8
