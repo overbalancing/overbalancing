@@ -9,7 +9,7 @@ use crate::{Balance, Ball, Board, LANE_COUNT};
 pub enum LandingError {
     /// No stack exists at the requested lane.
     InvalidLane,
-    /// A zero-weight ball cannot be placed.
+    /// The ball violates its kind-specific weight or palette invariants.
     ZeroWeight,
 }
 
@@ -230,7 +230,10 @@ mod tests {
             board.land(usize::MAX, ball(1)),
             Err(LandingError::InvalidLane)
         );
-        assert_eq!(board.land(1, ball(0)), Err(LandingError::ZeroWeight));
+        assert_eq!(
+            board.land(1, Ball::normal(0, BallColors::none())),
+            Err(LandingError::ZeroWeight)
+        );
         assert_eq!(board, before);
         assert!(board.place(1, ball(2)));
         let Ok(Some(flight)) = board.land(1, ball(2)) else {

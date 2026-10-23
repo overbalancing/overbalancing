@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="style.css"><title>Utility balls · Overbalancing</title></head><body>
+<header><nav aria-label="Documentation"><a href="index.html">Overbalancing documentation</a> · <a href="../specs/changes/utility-balls/proposal.html">Feature proposal</a></nav></header>
+<main><h1>Row lasers, column lasers and feathers</h1>
+<p>Utility balls are colorless, weigh zero and use procedural icons. They do not match or compress. Row and column lasers have horizontal and vertical arrow cues; a feather has its own curved silhouette. No external asset or new dependency is needed.</p>
+<h2>Earn and activate utilities</h2>
+<p>An ordinary clear containing a maximal matching horizontal run of at least five earns a row laser. Clearing four consecutive balls in each of at least three adjacent stacks in one ordinary clear earns a column laser. A nonempty ordinary clear earns a feather when every affected seesaw was balanced immediately before removal.</p>
+<p>Rewards enter the front of the original triggering lane's supply without replacing the held ball or losing previews. Blast damage, silver clears and laser damage do not create ordinary-clear rewards.</p>
+<p>A utility activates on direct vertical contact above or below a positive-weight ball, whether it arrives or was already resting in the stack. Flight contact also counts. Empty lanes and all-zero stacks leave the utility inert; a later positive-weight arrival can activate it.</p>
+<h2>Effects and scoring</h2>
+<ul><li>A row laser removes its own physical row across the board, accounting for tilt and bonus rows.</li><li>A column laser removes its entire lane.</li><li>A feather sets the remaining balls in its lane to weight zero without changing their kinds, colors or order.</li></ul>
+<p>A utility is consumed once when activated. Laser removal adds displayed points using removed weight times one hundred but does not advance levels. Feather weight changes award no removal points. Destroying a utility through an area effect does not itself activate it; actual contacts caused by the resulting gravity still follow the normal contact rules.</p>
+<p>A feathered bomb remains a bomb and can detonate on later positive-weight contact. A feathered stone remains a nonmatching, noncompressing stone. Zero-weight normal balls retain their color matching but award zero weight points.</p>
+<h2>Read and control the scene</h2>
+<p>Short white horizontal or vertical feedback identifies a laser's affected area; a pale feather wave identifies the changed lane. Keep icons, weights, sixteen previews and eight stack totals readable at 390-pixel portrait width. Effects supplement the changed board and do not require new buttons or diagnostic text.</p>
+<p>Down drops the held ball; Left/Right or pointer/touch selects the chute position. Backspace resets the board, pending clears, rewards, effects and active transit.</p>
+<h2>Verification status</h2>
+<p>On 2026-10-23, the UX engineer ran all six focused fixtures under Vulkan/Xvfb with actual X11 Down and Backspace inputs. Before, effect, settled, desktop and reset captures were inspected. Visual review passes at 390 × 844 and 1100 × 1000: horizontal/vertical utility icons, feather silhouette and numeric zero are distinguishable; directional white beams and the feather lane tint are visible; sixteen previews and eight totals remain readable without overlap.</p>
+<p>The row fixture displays 500 points and the column fixture 700, both remaining at level one with 1000 points needed. Feathered stone and normal balls retain their distinct shapes/colors while showing zero and awarding no points. An isolated feather remains inert after its first drop; a later positive-weight ball consumes it and becomes weight zero, confirmed by the activation log. Row and feather rewards appear at the front of lane six's previews after a 600-point clear. The column-reward fixture shows 1700 points at level two with silver and column-laser rewards in lane four. These are one-based visible lane labels. Reset returns the fixtures to empty boards. Physical phone execution and customer acceptance remain separate.</p>
+<h2>Focused fixtures</h2>
+<pre><code>cargo run --locked -p overbalancing-app --bin overbalancing -- --utility-row-demo</code></pre>
+<p>Other focused fixtures are <code>--utility-column-demo</code>, <code>--utility-feather-demo</code>, <code>--utility-inert-demo</code> and <code>--utility-reward-demo</code> and <code>--utility-column-reward-demo</code>. Press Down to exercise the fixture and Backspace to reset.</p>
+</main></body></html>
