@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="style.css"><title>Color cues · Overpalancing</title></head>
+<body>
+<header><nav aria-label="Documentation"><a href="index.html">Overpalancing documentation</a></nav></header>
+<main>
+<h1>Ball color cues</h1>
+<p>The owner-corrected visual direction keeps the first distinct colors plain and adds subtle procedural marks to later palette colors. Original geometry is rendered directly; no image assets, external fonts or new dependency are required. Cues do not change matching, weight or joker rules.</p>
+<h2>Plain early colors, subtle later marks</h2>
+<p>The first six palette entries, ColorId 0–5, show their fill and numeric weight without a symbol. This six-color boundary is the current implementation interpretation of the owner's “first few colors.” Later entries use the established triangle, square, diamond, plus, X and star vocabulary as filled shapes in a slightly lighter or darker shade of the same hue.</p>
+<p>Do not draw outlined symbols or a white central weight disc. Weight text remains directly on the ball with an appropriate contrasting text shade. Marks supplement rather than dominate the fill. Apply the same deterministic mapping to previews, held balls, stationary balls, drops and flights.</p>
+<p>The symbol vocabulary is finite and repeats deterministically for higher identifiers. It does not guarantee unique non-color cues for every possible level. The first six colors deliberately have no redundant shape cue, so this design must not be described as fully independent of color perception.</p>
+<h2>Jokers and readable weights</h2>
+<p>Each joker sector retains its own fill. A sector belonging to a later marked color receives that color's subtle filled mark, clipped to the sector; an early plain color's sector stays plain. Keep numeric weight readable without a white plate, including multi-digit values, and keep the sector assignment stable while moving.</p>
+<h2>Verification status</h2>
+<p>On 2026-10-20, the UX engineer inspected regenerated desktop and 390-pixel portrait palette renders, dropping and settled frames, and a wrapped-flight frame. The corrected owner direction passes this visual review: the first six entries are plain, later entries have subdued same-hue filled marks, and balls have neither outlined glyphs nor white weight discs. Direct weight text remains readable for the tested values 12 and 125; joker sectors retain their individual marks where applicable. The subdued marks intentionally supplement color and do not establish color-independent recognition. The earlier large-outline/white-plate review is historical and is superseded by these regenerated renders. Phone execution, color-vision user testing and customer acceptance remain separate.</p>
+<h2>Try the palette fixture</h2>
+<pre><code>cargo run --locked -p overpalancing-app --bin overpalancing -- --palette-demo</code></pre>
+<p>Use Down to inspect a ball during a drop. The fixture includes twelve palette entries, multicolor jokers and a three-digit weight.</p>
+<h2>Current evidence</h2><ul><li><a href="evidence/color-cues-desktop.png">Desktop palette</a> · <a href="evidence/color-cues-390.png">390-pixel portrait palette</a></li><li><a href="evidence/color-cues-drop-390.png">Drop</a> · <a href="evidence/color-cues-flight-390.png">wrapped flight</a> · <a href="evidence/color-cues-clear-390.png">clear glow</a></li></ul><p>All 80 local nextest tests pass, alongside fmt, warnings-denied Clippy and rustdoc, doctests, audit, deny, PR-policy tests, actionlint and HTML checks. The existing indirect ttf-parser maintenance advisory remains visible. Platform CI and owner acceptance are tracked separately.</p></main>
+</body>
+</html>
