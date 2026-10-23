@@ -117,6 +117,7 @@ pub struct PendingClear {
     eligible_points: u64,
     score_only: u64,
     trigger_lane: usize,
+    flight_caused: bool,
 }
 impl PendingClear {
     /// Current bottom-to-top identities; read again after every prepare or commit.
@@ -581,6 +582,25 @@ pub fn prepare_landing(
     lane: usize,
     ball: Ball,
 ) -> Result<Outcome, ResolutionError> {
+    prepare_arrival(board, pending, lane, ball, false)
+}
+/// Prepare a genuine seesaw-flight landing; only a newly opened ordinary clear
+/// receives flight provenance, retained through subsequent gravity clear phases.
+pub fn prepare_flight_landing(
+    board: &mut Board,
+    pending: &mut PendingClear,
+    lane: usize,
+    ball: Ball,
+) -> Result<Outcome, ResolutionError> {
+    prepare_arrival(board, pending, lane, ball, true)
+}
+fn prepare_arrival(
+    board: &mut Board,
+    pending: &mut PendingClear,
+    lane: usize,
+    ball: Ball,
+    from_flight: bool,
+) -> Result<Outcome, ResolutionError> {
     if lane >= LANE_COUNT {
         return Err(ResolutionError::InvalidLane);
     }
@@ -589,12 +609,21 @@ pub fn prepare_landing(
     }
     let mut candidate = board.clone();
     let mut next_pending = pending.clone();
+    let had_ordinary_clear = !next_pending.cells.is_empty();
+    if !had_ordinary_clear {
+        next_pending.flight_caused = false;
+    }
     let before = balances(&candidate);
     if next_pending.is_empty() {
         next_pending.trigger_lane = lane;
     }
     candidate.stacks[lane].push(ball);
     let outcome = prepare_phase(&mut candidate, &mut next_pending, before)?;
+    if !had_ordinary_clear && !next_pending.cells.is_empty() {
+        // Deferred damage points do not own a later ordinary clear's cause.
+        next_pending.trigger_lane = lane;
+        next_pending.flight_caused = from_flight;
+    }
     *board = candidate;
     *pending = next_pending;
     Ok(outcome)
@@ -640,10 +669,10 @@ fn clear_rewards(
         for cell in row.values().copied() {
             let linked = previous.is_some_and(|old| {
                 old.lane + 1 == cell.lane
-                    && board.stacks[old.lane][old.index]
-                        .colors
-                        .iter()
-                        .any(|color| board.stacks[cell.lane][cell.index].colors.contains(color))
+                    && matching::shares_color(
+                        &board.stacks[old.lane][old.index],
+                        &board.stacks[cell.lane][cell.index],
+                    )
             });
             if !linked {
                 row_count += usize::from(length >= 5);
@@ -695,7 +724,14 @@ pub fn commit_clear(
     let mut next_progression = progression.clone();
     let mut next_pending = pending.clone();
     let before = balances(&candidate);
-    let rewards = clear_rewards(&candidate, &next_pending.cells, next_pending.trigger_lane)?;
+    let mut rewards = clear_rewards(&candidate, &next_pending.cells, next_pending.trigger_lane)?;
+    if next_pending.flight_caused && !next_pending.cells.is_empty() {
+        rewards.push(Reward {
+            lane: next_pending.trigger_lane,
+            ball: Ball::ultimate_joker(),
+            count: 1,
+        });
+    }
     let ordinary =
         scoring::score_cells(&candidate, &next_pending.cells).map_err(ResolutionError::Score)?;
     let eligible = ordinary
@@ -1903,3 +1939,7 @@ mod special_tests {
 #[cfg(test)]
 #[path = "utility_tests.rs"]
 mod utility_tests;
+
+#[cfg(test)]
+#[path = "ultimate_tests.rs"]
+mod ultimate_tests;

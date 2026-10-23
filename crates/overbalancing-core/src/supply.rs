@@ -104,12 +104,14 @@ pub enum SupplyError {
 struct SupplyRun {
     ball: Ball,
     count: u32,
+    earned: bool,
 }
 /// Sixteen previews and one ball held independently in the chute.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Supply {
     held: Ball,
     previews: [[Ball; 2]; LANE_COUNT],
+    preview_earned: [[bool; 2]; LANE_COUNT],
     overflow: [VecDeque<SupplyRun>; LANE_COUNT],
 }
 impl Supply {
@@ -128,6 +130,7 @@ impl Supply {
         Ok(Self {
             held,
             previews,
+            preview_earned: [[false; 2]; LANE_COUNT],
             overflow: std::array::from_fn(|_| VecDeque::new()),
         })
     }
@@ -164,27 +167,74 @@ impl Supply {
         self.overflow[lane].push_front(SupplyRun {
             ball: self.previews[lane][1].clone(),
             count: 1,
+            earned: self.preview_earned[lane][1],
         });
         self.overflow[lane].push_front(SupplyRun {
             ball: self.previews[lane][0].clone(),
             count: 1,
+            earned: self.preview_earned[lane][0],
         });
-        self.overflow[lane].push_front(SupplyRun { ball, count });
+        self.overflow[lane].push_front(SupplyRun {
+            ball,
+            count,
+            earned: true,
+        });
         for index in 0..2 {
-            self.previews[lane][index] = Self::pop_front(&mut self.overflow[lane]);
+            let (ball, earned) = Self::pop_front(&mut self.overflow[lane]);
+            self.previews[lane][index] = ball;
+            self.preview_earned[lane][index] = earned;
         }
         Ok(())
     }
-    fn pop_front(queue: &mut VecDeque<SupplyRun>) -> Ball {
+    /// Reserve earned rewards after the current first preview. Previously earned
+    /// runs retain FIFO order before the displaced natural preview and backlog.
+    /// The held ball and each lane's protected first preview remain unchanged.
+    pub fn insert_reward_after_preview_count(
+        &mut self,
+        lane: usize,
+        ball: Ball,
+        count: u32,
+    ) -> Result<(), SupplyError> {
+        if lane >= LANE_COUNT {
+            return Err(SupplyError::InvalidLane);
+        }
+        if !ball.is_valid() {
+            return Err(SupplyError::ZeroWeight);
+        }
+        if count == 0 {
+            return Ok(());
+        }
+        let queue = &mut self.overflow[lane];
+        queue.push_front(SupplyRun {
+            ball: self.previews[lane][1].clone(),
+            count: 1,
+            earned: self.preview_earned[lane][1],
+        });
+        let insertion = queue.iter().take_while(|run| run.earned).count();
+        queue.insert(
+            insertion,
+            SupplyRun {
+                ball,
+                count,
+                earned: true,
+            },
+        );
+        let (next, earned) = Self::pop_front(queue);
+        self.previews[lane][1] = next;
+        self.preview_earned[lane][1] = earned;
+        Ok(())
+    }
+    fn pop_front(queue: &mut VecDeque<SupplyRun>) -> (Ball, bool) {
         let Some(run) = queue.front_mut() else {
             unreachable!("replacement queue is populated before consumption");
         };
         let ball = run.ball.clone();
+        let earned = run.earned;
         run.count -= 1;
         if run.count == 0 {
             queue.pop_front();
         }
-        ball
+        (ball, earned)
     }
     /// Return the previous held ball, refill the chute from a chosen front
     /// preview and append exactly one supplied replacement to that lane.
@@ -199,8 +249,11 @@ impl Supply {
         self.overflow[source].push_back(SupplyRun {
             ball: next,
             count: 1,
+            earned: false,
         });
-        let next = Self::pop_front(&mut self.overflow[source]);
+        let (next, earned) = Self::pop_front(&mut self.overflow[source]);
+        self.preview_earned[source][0] = self.preview_earned[source][1];
+        self.preview_earned[source][1] = earned;
         let lane = &mut self.previews[source];
         let front = std::mem::replace(&mut lane[1], next);
         let front = std::mem::replace(&mut lane[0], front);
@@ -468,5 +521,145 @@ mod category_tests {
             invalid.generate(&mut || panic!("invalid rate must not draw")),
             Err(GenerationError::InvalidCombinedPercent)
         );
+    }
+}
+
+#[cfg(test)]
+mod reservation_tests {
+    use super::*;
+    fn tagged(weight: u32) -> Ball {
+        Ball::normal(weight, BallColors::single(ColorId::new(weight)))
+    }
+    fn supply() -> Supply {
+        let mut supply = Supply::new(GeneratorConfig::new(NonZeroU32::MIN), &mut || u64::MAX)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        supply.held = tagged(11);
+        supply.previews[0] = [tagged(12), tagged(13)];
+        supply.overflow[0].push_back(SupplyRun {
+            ball: tagged(14),
+            count: 1,
+            earned: false,
+        });
+        supply
+    }
+    fn draws(supply: &mut Supply, count: usize) -> Vec<Ball> {
+        (0..count)
+            .map(|index| {
+                supply
+                    .take_and_refill(0, tagged(100 + index as u32))
+                    .unwrap_or_else(|error| panic!("{error:?}"))
+            })
+            .collect()
+    }
+    #[test]
+    fn reward_keeps_held_and_first_preview_and_preserves_displaced_second() {
+        let mut supply = supply();
+        let before = supply.clone();
+        supply
+            .insert_reward_after_preview_count(0, Ball::ultimate_joker(), 2)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(supply.held(), before.held());
+        assert_eq!(
+            supply.previews(0),
+            Some(&[tagged(12), Ball::ultimate_joker()])
+        );
+        for lane in 1..LANE_COUNT {
+            assert_eq!(supply.previews(lane), before.previews(lane));
+        }
+        assert_eq!(
+            draws(&mut supply, 7),
+            vec![
+                tagged(11),
+                tagged(12),
+                Ball::ultimate_joker(),
+                Ball::ultimate_joker(),
+                tagged(13),
+                tagged(14),
+                tagged(100)
+            ]
+        );
+    }
+    #[test]
+    fn repeated_callbacks_and_rewards_after_consumption_keep_fifo_order() {
+        let mut supply = supply();
+        supply
+            .insert_reward_after_preview_count(0, Ball::row_laser(), 1)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        supply
+            .insert_reward_after_preview_count(0, Ball::column_laser(), 1)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(draws(&mut supply, 1), vec![tagged(11)]);
+        // Held B, first preview S1: a newly earned S3 stays behind existing S2.
+        supply
+            .insert_reward_after_preview_count(0, Ball::feather(), 1)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(
+            draws(&mut supply, 6),
+            vec![
+                tagged(12),
+                Ball::row_laser(),
+                Ball::column_laser(),
+                Ball::feather(),
+                tagged(13),
+                tagged(14)
+            ]
+        );
+    }
+    #[test]
+    fn naturally_generated_specials_are_not_mistaken_for_earned_reservations() {
+        let mut supply = supply();
+        supply.previews[0][1] = Ball::bomb();
+        supply
+            .insert_reward_after_preview_count(0, Ball::feather(), 1)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        supply
+            .insert_reward_after_preview_count(0, Ball::ultimate_joker(), 1)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(
+            draws(&mut supply, 6),
+            vec![
+                tagged(11),
+                tagged(12),
+                Ball::feather(),
+                Ball::ultimate_joker(),
+                Ball::bomb(),
+                tagged(14)
+            ]
+        );
+    }
+    #[test]
+    fn millions_of_reserved_rewards_use_one_compact_run_and_zero_is_noop() {
+        let mut supply = supply();
+        let before = supply.clone();
+        supply
+            .insert_reward_after_preview_count(0, Ball::ultimate_joker(), 0)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(supply, before);
+        supply
+            .insert_reward_after_preview_count(0, Ball::ultimate_joker(), u32::MAX)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert!(supply.overflow[0].len() <= 3);
+        assert_eq!(supply.overflow[0][0].count, u32::MAX - 1);
+        assert_eq!(
+            draws(&mut supply, 3),
+            vec![tagged(11), tagged(12), Ball::ultimate_joker()]
+        );
+        assert_eq!(supply.held(), &Ball::ultimate_joker());
+    }
+    #[test]
+    fn invalid_reservation_leaves_held_previews_tags_and_backlog_unchanged() {
+        let mut supply = supply();
+        let before = supply.clone();
+        assert_eq!(
+            supply.insert_reward_after_preview_count(LANE_COUNT, Ball::ultimate_joker(), 1),
+            Err(SupplyError::InvalidLane)
+        );
+        let mut invalid = Ball::ultimate_joker();
+        invalid.weight = 1;
+        assert_eq!(
+            supply.insert_reward_after_preview_count(0, invalid, 1),
+            Err(SupplyError::ZeroWeight)
+        );
+        assert_eq!(supply, before);
     }
 }

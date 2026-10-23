@@ -1,5 +1,5 @@
 //! Horizontal seeds and connected joker-aware color cascades.
-use crate::{Ball, Board, ColorId, LANE_COUNT};
+use crate::{Ball, BallKind, Board, ColorId, LANE_COUNT};
 use std::collections::BTreeSet;
 
 /// Stable identity of a ball for one immutable board snapshot.
@@ -17,6 +17,24 @@ pub struct MatchGroup {
     pub color: ColorId,
     /// Sorted ball identities; multi-color balls can occur in multiple groups.
     pub cells: Vec<Cell>,
+}
+/// Shared ordinary-color edge, including universal jokers but excluding colorless specials.
+pub(crate) fn shares_color(first: &Ball, second: &Ball) -> bool {
+    if !matches!(first.kind, BallKind::Normal | BallKind::UltimateJoker)
+        || !matches!(second.kind, BallKind::Normal | BallKind::UltimateJoker)
+    {
+        return false;
+    }
+    first.kind == BallKind::UltimateJoker
+        || second.kind == BallKind::UltimateJoker
+        || first
+            .colors
+            .iter()
+            .any(|color| second.colors.contains(color))
+}
+fn has_color(ball: &Ball, color: ColorId) -> bool {
+    ball.kind == BallKind::UltimateJoker
+        || (ball.kind == BallKind::Normal && ball.colors.contains(color))
 }
 fn ball(board: &Board, cell: Cell) -> Option<&Ball> {
     board.stack(cell.lane)?.get(cell.index)
@@ -74,6 +92,8 @@ fn horizontal_seed(capacities: &[usize; LANE_COUNT], cells: &BTreeSet<Cell>) -> 
 /// Horizontal adjacency uses global physical rows: stack index plus nine minus
 /// current lane capacity. Vertical adjacency uses successive stack indices.
 /// A component qualifies only if it contains three consecutive horizontal cells.
+/// Universal jokers participate in every concrete-color component. A universal-only
+/// triple has no concrete color and is represented by cascade_cells instead.
 /// This function neither removes balls nor chooses cross-color joker behavior.
 pub fn detect(board: &Board) -> Vec<MatchGroup> {
     detect_at(board, &capacities(board))
@@ -92,7 +112,7 @@ fn detect_at(board: &Board, capacities: &[usize; LANE_COUNT]) -> Vec<MatchGroup>
                 let mut cells = BTreeSet::from([start]);
                 while let Some(cell) = pending.pop() {
                     for next in neighbors(board, capacities, cell) {
-                        if ball(board, next).is_some_and(|ball| ball.colors.contains(color))
+                        if ball(board, next).is_some_and(|ball| has_color(ball, color))
                             && visited.insert((color, next))
                         {
                             cells.insert(next);
@@ -133,7 +153,38 @@ pub fn cascade_cells(board: &Board) -> Vec<Cell> {
 }
 pub(crate) fn cascade_at(board: &Board, capacities: &[usize; LANE_COUNT]) -> Vec<Cell> {
     let groups = detect_at(board, capacities);
-    expand_at(board, capacities, &unique_cells(&groups))
+    let mut seeds = unique_cells(&groups);
+    // A universal-only horizontal triple has no concrete ColorId to enumerate.
+    // Seed those identities directly instead of inventing a reserved color value.
+    for lane in 0..LANE_COUNT.saturating_sub(2) {
+        for (index, ball) in board.stack(lane).unwrap_or_default().iter().enumerate() {
+            if ball.kind != BallKind::UltimateJoker {
+                continue;
+            }
+            let start = Cell { lane, index };
+            let physical_row = row(capacities, start);
+            let mut run = vec![start];
+            for (next_lane, capacity) in capacities.iter().enumerate().skip(lane + 1).take(2) {
+                let Some(next_index) = physical_row.checked_sub(9 - capacity) else {
+                    break;
+                };
+                let next = Cell {
+                    lane: next_lane,
+                    index: next_index,
+                };
+                if self::ball(board, next).is_some_and(|ball| ball.kind == BallKind::UltimateJoker)
+                {
+                    run.push(next);
+                } else {
+                    break;
+                }
+            }
+            if run.len() == 3 {
+                seeds.extend(run);
+            }
+        }
+    }
+    expand_at(board, capacities, &seeds)
 }
 pub(crate) fn expand_at(
     board: &Board,
@@ -151,12 +202,8 @@ pub(crate) fn expand_at(
             continue;
         };
         for next in neighbors(board, capacities, cell) {
-            if ball(board, next).is_some_and(|neighbor| {
-                current
-                    .colors
-                    .iter()
-                    .any(|color| neighbor.colors.contains(color))
-            }) && selected.insert(next)
+            if ball(board, next).is_some_and(|neighbor| shares_color(current, neighbor))
+                && selected.insert(next)
             {
                 pending.push(next);
             }
