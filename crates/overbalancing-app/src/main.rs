@@ -1,4 +1,4 @@
 //! Desktop entry point.
 fn main() {
-    overpalancing_app::run();
+    overbalancing_app::run();
 }

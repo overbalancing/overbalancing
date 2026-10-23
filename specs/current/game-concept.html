@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Game concept · Overpalancing</title>
+<title>Game concept · Overbalancing</title>
 <link rel="stylesheet" href="../../docs/style.css">
 </head>
 <body>
 <header>
-<a href="../../docs/index.html">Overpalancing documentation</a>
+<a href="../../docs/index.html">Overbalancing documentation</a>
 </header>
 <main>
 <h1>Game concept</h1>
@@ -32,13 +32,13 @@
 <li>A horizontal row of three or more balls of the same color seeds clearing of the entire orthogonally connected group. Jokers bridge color changes: red can connect through a red/blue joker into blue and onwards through further jokers. Points equal the total weights of the removed balls multiplied by 100; each removed ball is counted once.</li>
 <li>A ball may have up to three colors and acts as a joker.</li>
 </ul>
-<h2>Initial progression tuning</h2><p>The lead proposes an adjustable points curve: start at level 1; gaining the next level requires 1000 times the current level in additional points. Keep points beyond a threshold and preserve already visible balls when the palette grows. The owner is considering starting at level 3 but has not chosen that change; the existing --level 3 option supports comparison.</p><h2>Unresolved future rules</h2>
+<h2>Initial progression tuning</h2><p>Start at level 1. Advancing from level 1 requires 1000 additional points and advancing from level 2 requires 2000. From level 3 onward, advancing from level L requires 2000 times L additional points: 6000 for 3 to 4, 8000 for 4 to 5, and so on. This owner-selected factor of two slows later progression. Keep points beyond a threshold and preserve already visible balls when the palette grows. The owner is considering starting at level 3 but has not chosen that change; the existing --level 3 option supports comparison.</p><h2>Full-reversal warning</h2><p>When the held ball at the selected chute position would cause a full seesaw reversal, blink the actual affected stack total. Keep the displayed total unchanged; never substitute a predicted future weight. Evaluate the warning by cloning the real landing resolver so bombs, compression and other special interactions are included without changing the live board, pending clears, score, supply or random stream.</p><h2>Unresolved future rules</h2>
 <ul>
 <li>Multiplayer scheduling and opponent-first flight routing across boards.</li>
 <li>Further level progression tuning and the final starting level.</li>
 </ul>
 <p>Route new ideas to this capability or a new focused capability and use change proposals for implementation.</p>
 </main>
-<footer>Overpalancing · Source-available game</footer>
+<footer>Overbalancing · Source-available game</footer>
 </body>
 </html>

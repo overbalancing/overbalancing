@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="style.css">
-<title>Flight reactions · Overpalancing</title>
+<title>Flight reactions · Overbalancing</title>
 </head>
 <body>
-<header><nav aria-label="Documentation"><a href="index.html">Overpalancing documentation</a> · <a href="level-supply.html">Level supply</a></nav></header>
+<header><nav aria-label="Documentation"><a href="index.html">Overbalancing documentation</a> · <a href="level-supply.html">Level supply</a></nav></header>
 <main>
 <h1>Flight reactions</h1>
 <p>The level-supply view presents accepted drops, wrapped launches and chained landings with original primitive animation. The core determines game outcomes; animation presents them without changing distances, weights, colors or the order of reactions. No external art assets or new dependency are needed.</p>
@@ -21,10 +21,10 @@
 <p>On 2026-10-20, the UX engineer inspected actual Linux drop, launch, settled and reset renders, including 390-pixel portrait and desktop views. Visual review passed: BUSY and the launch distance/destination are readable, the flying ball is distinct from the refilled held ball, the landing ring is visible, all four seesaws remain readable and Reset stays reachable. Paired edge screenshots show a ball leaving the left boundary and returning from the right. A reset screenshot shows an empty board without an active flight.</p>
 <p>The lead separately exercised the demo through X11 keyboard input, observed a two-launch chain and a subsequent four-lane left wrap, and verified Reset during an incoming drop. These interaction results are not inferred from still images. Physical phone execution, other-platform runtime proof and customer acceptance remain pending. Matching, compression and level progression are subsequent work and are not implemented by this feature.</p>
 <h2>Try a reproducible reaction</h2>
-<pre><code>cargo run --locked -p overpalancing-app --bin overpalancing -- --flight-demo</code></pre>
+<pre><code>cargo run --locked -p overbalancing-app --bin overbalancing -- --flight-demo</code></pre>
 <p>Press Down, Space or Enter to start the fixture's drop and reaction chain. Backspace cancels the reaction and restores a normal empty level-five board rather than reseeding the fixture. For ordinary play with weights that can demonstrate reactions, launch with <code>--level 3</code>. Normal level one contains only weight-one balls and does not demonstrate the full flip reaction by itself.</p>
 <ul><li><a href="evidence/flight-launch-landscape.png">Launching in landscape</a></li><li><a href="evidence/flight-launch-390.png">Launching at 390 pixels</a></li><li><a href="evidence/flight-settled-390.png">Settled chain at 390 pixels</a></li><li><a href="evidence/flight-wrap-left-before.png">Before crossing the left edge</a></li><li><a href="evidence/flight-wrap-left-after.png">After returning at the right edge</a></li></ul>
-<h2>Try both edge wraps</h2><pre><code>cargo run --locked -p overpalancing-app --bin overpalancing -- --wrap-left-demo
-cargo run --locked -p overpalancing-app --bin overpalancing -- --wrap-right-demo</code></pre><p>Run either fixture and press Down once. The left fixture launches from zero-based lane 1 to 7; the right fixture launches from lane 6 to 0. Both use a distance of two positions.</p></main>
+<h2>Try both edge wraps</h2><pre><code>cargo run --locked -p overbalancing-app --bin overbalancing -- --wrap-left-demo
+cargo run --locked -p overbalancing-app --bin overbalancing -- --wrap-right-demo</code></pre><p>Run either fixture and press Down once. The left fixture launches from zero-based lane 1 to 7; the right fixture launches from lane 6 to 0. Both use a distance of two positions.</p></main>
 </body>
 </html>

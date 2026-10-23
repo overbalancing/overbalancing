@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="style.css"><title>Color cues · Overpalancing</title></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="style.css"><title>Color cues · Overbalancing</title></head>
 <body>
-<header><nav aria-label="Documentation"><a href="index.html">Overpalancing documentation</a></nav></header>
+<header><nav aria-label="Documentation"><a href="index.html">Overbalancing documentation</a></nav></header>
 <main>
 <h1>Ball color cues</h1>
 <p>The owner-corrected visual direction keeps the first distinct colors plain and adds subtle procedural marks to later palette colors. Original geometry is rendered directly; no image assets, external fonts or new dependency are required. Cues do not change matching, weight or joker rules.</p>
@@ -15,7 +15,7 @@
 <h2>Verification status</h2>
 <p>On 2026-10-20, the UX engineer inspected regenerated desktop and 390-pixel portrait palette renders, dropping and settled frames, and a wrapped-flight frame. The corrected owner direction passes this visual review: the first six entries are plain, later entries have subdued same-hue filled marks, and balls have neither outlined glyphs nor white weight discs. Direct weight text remains readable for the tested values 12 and 125; joker sectors retain their individual marks where applicable. The subdued marks intentionally supplement color and do not establish color-independent recognition. The earlier large-outline/white-plate review is historical and is superseded by these regenerated renders. Phone execution, color-vision user testing and customer acceptance remain separate.</p>
 <h2>Try the palette fixture</h2>
-<pre><code>cargo run --locked -p overpalancing-app --bin overpalancing -- --palette-demo</code></pre>
+<pre><code>cargo run --locked -p overbalancing-app --bin overbalancing -- --palette-demo</code></pre>
 <p>Use Down to inspect a ball during a drop. The fixture includes twelve palette entries, multicolor jokers and a three-digit weight.</p>
 <h2>Current evidence</h2><ul><li><a href="evidence/color-cues-desktop.png">Desktop palette</a> · <a href="evidence/color-cues-390.png">390-pixel portrait palette</a></li><li><a href="evidence/color-cues-drop-390.png">Drop</a> · <a href="evidence/color-cues-flight-390.png">wrapped flight</a> · <a href="evidence/color-cues-clear-390.png">clear glow</a></li></ul><p>All 80 local nextest tests pass, alongside fmt, warnings-denied Clippy and rustdoc, doctests, audit, deny, PR-policy tests, actionlint and HTML checks. The existing indirect ttf-parser maintenance advisory remains visible. Platform CI and owner acceptance are tracked separately.</p></main>
 </body>

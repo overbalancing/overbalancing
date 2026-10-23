@@ -17,8 +17,8 @@ udid = device["udid"]
 if device["state"] != "Booted":
     run("xcrun", "simctl", "boot", udid)
 run("xcrun", "simctl", "bootstatus", udid, "-b")
-run("xcrun", "simctl", "install", udid, "target/ios-simulator/Overpalancing.app")
-run("xcrun", "simctl", "launch", "--terminate-running-process", udid, "dev.overpalancing.game")
+run("xcrun", "simctl", "install", udid, "target/ios-simulator/Overbalancing.app")
+run("xcrun", "simctl", "launch", "--terminate-running-process", udid, "dev.overbalancing.game")
 time.sleep(5)
 run("xcrun", "simctl", "io", udid, "screenshot", "target/ios-simulator/launch.png")
 print(f"Installed and launched on {device['name']}; screenshot saved (visual review remains required)")

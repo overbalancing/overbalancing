@@ -124,7 +124,7 @@ pub fn unique_cells(groups: &[MatchGroup]) -> Vec<Cell> {
 
 /// Snapshot platform capacities for one frozen-geometry resolution phase.
 pub(crate) fn capacities(board: &Board) -> [usize; LANE_COUNT] {
-    std::array::from_fn(|lane| board.capacity(lane).unwrap_or(8))
+    std::array::from_fn(|lane| board.capacity(lane).unwrap_or(8) - board.bonus_rows())
 }
 /// Expand every horizontal seed through orthogonal shared-color edges.
 /// A joker may switch the traversed color; ball identities are returned once.
@@ -173,7 +173,14 @@ mod tests {
         let Some(colors) = BallColors::new(colors) else {
             panic!("valid palette");
         };
-        assert!(board.place(lane, Ball { weight, colors }));
+        assert!(board.place(
+            lane,
+            Ball {
+                kind: crate::BallKind::Normal,
+                weight,
+                colors
+            }
+        ));
     }
     #[test]
     fn horizontal_seed_clears_detection_for_entire_same_color_component() {

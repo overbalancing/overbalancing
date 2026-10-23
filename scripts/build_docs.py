@@ -13,5 +13,5 @@ for name in ("LICENSE.html", "AGENTS.md"):
     shutil.copy2(root / name, site / name)
 shutil.copytree(root / "target/doc", site / "api", dirs_exist_ok=True)
 (site / ".nojekyll").touch()
-(site / "index.html").write_text('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Overpalancing</title><meta http-equiv="refresh" content="0; url=docs/index.html"></head><body><a href="docs/index.html">Project documentation</a></body></html>\n')
+(site / "index.html").write_text('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Overbalancing</title><meta http-equiv="refresh" content="0; url=docs/index.html"></head><body><a href="docs/index.html">Project documentation</a></body></html>\n')
 print(f"Built {site}")

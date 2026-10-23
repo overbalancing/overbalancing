@@ -2,9 +2,11 @@
 mod ball_visual;
 use bevy::log::{error, info, warn};
 use bevy::{prelude::*, window::PrimaryWindow};
-use overpalancing_core::supply::{GenerationError, GeneratorConfig, Supply};
-use overpalancing_core::{Ball, BallColors, Board, ColorId, Dispenser, LANE_COUNT, SEESAW_COUNT};
-use overpalancing_core::{matching::Cell, resolution, scoring::Progression};
+use overbalancing_core::supply::{GenerationError, GeneratorConfig, Supply};
+use overbalancing_core::{
+    Ball, BallColors, BallKind, Board, ColorId, Dispenser, LANE_COUNT, SEESAW_COUNT,
+};
+use overbalancing_core::{matching::Cell, resolution, scoring::Progression};
 use std::collections::VecDeque;
 use std::{
     num::NonZeroU32,
@@ -55,6 +57,7 @@ struct Playfield {
     game_over: bool,
     busy: bool,
     error: Option<&'static str>,
+    undelivered_rewards: Vec<resolution::Reward>,
 }
 impl Playfield {
     fn new(level: NonZeroU32, mut random: Random) -> Result<Self, GenerationError> {
@@ -74,6 +77,7 @@ impl Playfield {
             game_over: false,
             busy: false,
             error: None,
+            undelivered_rewards: Vec::new(),
         })
     }
     fn drop_ball(&mut self, motion: &mut Motion) -> Result<(), &'static str> {
@@ -94,7 +98,9 @@ impl Playfield {
         motion.drop(Transit {
             ball: held,
             destination,
-            path: Path::Drop,
+            path: Path::Drop {
+                start_y: 570.0 + board_lift(&self.board),
+            },
             elapsed: 0.0,
             duration: 0.5 / 3.0,
         });
@@ -118,6 +124,7 @@ impl Playfield {
             self.game_over = false;
             self.busy = false;
             self.error = None;
+            self.undelivered_rewards.clear();
             info!(
                 event = "reset",
                 level = self.config.level.get(),
@@ -137,12 +144,14 @@ fn flight_demo() -> Result<Playfield, GenerationError> {
         NonZeroU32::new(5).unwrap_or(NonZeroU32::MIN),
         Random::seeded(),
     )?;
+    field.config.bomb_percent = 0;
     field.supply = Supply::new(field.config, &mut || u64::MAX - 1)?;
     for (lane, weights) in [(0, vec![1, 2]), (1, vec![2]), (4, vec![1]), (5, vec![2])] {
         for weight in weights {
             field.board.place(
                 lane,
                 Ball {
+                    kind: BallKind::Normal,
                     weight,
                     colors: BallColors::single(ColorId::RED),
                 },
@@ -158,20 +167,32 @@ fn puzzle_demo() -> Result<Playfield, GenerationError> {
         NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
         Random::seeded(),
     )?;
-    let mut prefix = [0, 2, 99].into_iter();
-    field.supply = Supply::new(field.config, &mut || prefix.next().unwrap_or(u64::MAX))?;
+    field.config.bomb_percent = 0;
+    field.supply = Supply::new(field.config, &mut || u64::MAX - 1)?;
+    fixture_held(
+        &mut field,
+        Ball::normal(2, BallColors::single(ColorId::YELLOW)),
+    );
     for (lane, ids) in [vec![0], vec![0], vec![0, 1], vec![1], vec![1, 2], vec![2]]
         .into_iter()
         .enumerate()
     {
         let colors = BallColors::new(&ids.into_iter().map(ColorId::new).collect::<Vec<_>>())
             .unwrap_or_else(|| panic!("fixture colors"));
-        field.board.place(lane, Ball { weight: 1, colors });
+        field.board.place(
+            lane,
+            Ball {
+                kind: BallKind::Normal,
+                weight: 1,
+                colors,
+            },
+        );
     }
     for _ in 0..4 {
         field.board.place(
             6,
             Ball {
+                kind: BallKind::Normal,
                 weight: 1,
                 colors: BallColors::single(ColorId::YELLOW),
             },
@@ -188,12 +209,17 @@ fn wrap_demo(rightward: bool) -> Result<Playfield, GenerationError> {
         NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
         Random::seeded(),
     )?;
-    let mut prefix = [1, 1, 99].into_iter();
-    field.supply = Supply::new(field.config, &mut || prefix.next().unwrap_or(u64::MAX))?;
+    field.config.bomb_percent = 0;
+    field.supply = Supply::new(field.config, &mut || u64::MAX - 1)?;
+    fixture_held(
+        &mut field,
+        Ball::normal(3, BallColors::single(ColorId::BLUE)),
+    );
     let (origin, arrival) = if rightward { (6, 7) } else { (1, 0) };
     field.board.place(
         origin,
         Ball {
+            kind: BallKind::Normal,
             weight: 1,
             colors: BallColors::single(ColorId::RED),
         },
@@ -212,9 +238,10 @@ fn palette_demo() -> Result<Playfield, GenerationError> {
     let mut samples = Vec::new();
     for index in 0..17u64 {
         let weight = if index == 0 { 6 } else { index % 7 };
-        samples.extend([weight + 7 * 100, 12 * 100 + index % 12, 99]);
+        samples.extend([99, weight + 7 * 100, 12 * 100 + index % 12]);
     }
     let mut samples = samples.into_iter();
+    field.config.bomb_percent = 0;
     field.supply = Supply::new(field.config, &mut || samples.next().unwrap_or(u64::MAX))?;
     for lane in 0..LANE_COUNT {
         let ids = match lane {
@@ -232,10 +259,85 @@ fn palette_demo() -> Result<Playfield, GenerationError> {
         field.board.place(
             lane,
             Ball {
+                kind: BallKind::Normal,
                 weight: if lane == 6 { 125 } else { 12 },
                 colors,
             },
         );
+    }
+    Ok(field)
+}
+// Development scenes use real core resolution and wait for an actual throw.
+fn fixture_held(field: &mut Playfield, ball: Ball) {
+    field
+        .supply
+        .insert_reward_front(0, ball)
+        .unwrap_or_else(|error| panic!("invalid fixture reward {error:?}"));
+    let _ = field
+        .supply
+        .take_and_refill(0, Ball::normal(1, BallColors::single(ColorId::RED)))
+        .unwrap_or_else(|error| panic!("invalid fixture supply {error:?}"));
+}
+fn special_demo(mode: &str) -> Result<Playfield, GenerationError> {
+    let mut field = Playfield::new(NonZeroU32::MIN, Random::seeded())?;
+    let ordinary = |weight| Ball::normal(weight, BallColors::single(ColorId::RED));
+    match mode {
+        "bomb" => {
+            field.board.place(0, ordinary(1));
+            field.board.place(1, Ball::bomb());
+            field.board.place(2, Ball::stone());
+            field.board.place(3, ordinary(5));
+            fixture_held(&mut field, Ball::bomb());
+        }
+        "silver" => {
+            field.board.place(0, Ball::silver_star());
+            field.board.place(1, Ball::silver_star());
+            field.board.place(6, ordinary(5));
+            field.board.place(7, ordinary(5));
+            fixture_held(&mut field, Ball::silver_star());
+            for _ in 0..2 {
+                field.chute.shift(1);
+            }
+        }
+        "gold" | "bonus" => {
+            for _ in 0..if mode == "bonus" { 3 } else { 2 } {
+                for lane in 0..4 {
+                    field.board.place(lane, Ball::gold_star());
+                }
+                resolution::land(
+                    &mut field.board,
+                    &mut field.progression,
+                    4,
+                    Ball::gold_star(),
+                )
+                .unwrap_or_else(|error| panic!("invalid expansion fixture {error:?}"));
+            }
+            field.board.place(7, Ball::stone());
+            if mode == "gold" {
+                for lane in 0..4 {
+                    field.board.place(lane, Ball::gold_star());
+                }
+            }
+            fixture_held(&mut field, Ball::gold_star());
+            for _ in 0..4 {
+                field.chute.shift(1);
+            }
+        }
+        "edge" => {
+            field.board.place(1, ordinary(1));
+            field.board.place(1, Ball::silver_star());
+            fixture_held(
+                &mut field,
+                Ball::normal(3, BallColors::single(ColorId::BLUE)),
+            );
+        }
+        _ => {
+            field.board.place(0, Ball::silver_star());
+            field.board.place(1, Ball::gold_star());
+            field.board.place(2, Ball::bomb());
+            field.board.place(3, Ball::stone());
+            fixture_held(&mut field, Ball::silver_star());
+        }
     }
     Ok(field)
 }
@@ -259,6 +361,10 @@ fn launch_level(args: &[String]) -> Result<NonZeroU32, &'static str> {
 #[derive(Component)]
 struct Scene;
 #[derive(Component)]
+struct StackTotal(usize);
+#[derive(Resource, Default)]
+struct ReversalWarning(Option<usize>);
+#[derive(Component)]
 struct SceneCamera;
 #[derive(Resource, Default)]
 struct Smoke {
@@ -277,7 +383,20 @@ pub fn run() {
             return;
         }
     };
-    let field = match if args.iter().any(|arg| arg == "--palette-demo") {
+    let special_mode = [
+        ("--special-bomb-demo", "bomb"),
+        ("--special-silver-demo", "silver"),
+        ("--special-gold-demo", "gold"),
+        ("--special-bonus-demo", "bonus"),
+        ("--special-edge-demo", "edge"),
+        ("--warning-demo", "edge"),
+        ("--special-demo", "merge"),
+    ]
+    .into_iter()
+    .find_map(|(flag, mode)| args.iter().any(|arg| arg == flag).then_some(mode));
+    let field = match if let Some(mode) = special_mode {
+        special_demo(mode)
+    } else if args.iter().any(|arg| arg == "--palette-demo") {
         palette_demo()
     } else if args.iter().any(|arg| arg == "--wrap-left-demo") {
         wrap_demo(false)
@@ -309,9 +428,10 @@ pub fn run() {
         .insert_resource(field)
         .init_resource::<Motion>()
         .init_resource::<Clearing>()
+        .init_resource::<ReversalWarning>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Overpalancing - level supply".into(),
+                title: "Overbalancing - level supply".into(),
                 resolution: if portrait {
                     (540, 960).into()
                 } else {
@@ -332,26 +452,40 @@ pub fn run() {
                 animate,
                 fit_camera,
                 redraw,
+                predict_reversal,
+                pulse_reversal,
                 pulse_clear,
                 draw_motion,
+                draw_effects,
                 smoke_test,
             )
                 .chain(),
         )
         .run();
 }
-fn view_scale(width: f32, height: f32) -> Option<f32> {
+fn board_lift(board: &Board) -> f32 {
+    board.bonus_rows() as f32 * ROW_HEIGHT
+}
+fn view_scale_for(width: f32, height: f32, bonus: usize) -> Option<f32> {
     (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
-        .then(|| (WIDTH / width).max(HEIGHT / height))
+        .then(|| (WIDTH / width).max((HEIGHT + bonus as f32 * ROW_HEIGHT) / height))
+}
+#[cfg(test)]
+fn view_scale(width: f32, height: f32) -> Option<f32> {
+    view_scale_for(width, height, 0)
 }
 fn fit_camera(
+    field: Res<Playfield>,
     window: Single<&Window, With<PrimaryWindow>>,
-    mut camera: Single<&mut Projection, With<SceneCamera>>,
+    mut camera: Single<(&mut Projection, &mut Transform), With<SceneCamera>>,
 ) {
-    if let (Projection::Orthographic(projection), Some(scale)) =
-        (&mut **camera, view_scale(window.width(), window.height()))
-    {
+    let (projection, transform) = &mut *camera;
+    if let (Projection::Orthographic(projection), Some(scale)) = (
+        &mut **projection,
+        view_scale_for(window.width(), window.height(), field.board.bonus_rows()),
+    ) {
         projection.scale = scale;
+        transform.translation.y = board_lift(&field.board) / 2.0;
     }
 }
 fn label(
@@ -362,18 +496,20 @@ fn label(
     size: f32,
     scale: f32,
     color: Color,
-) {
-    commands.spawn((
-        Scene,
-        Text2d::new(text),
-        TextFont {
-            font_size: bevy::text::FontSize::Px(size.max(14.0 * scale)),
-            ..default()
-        },
-        TextLayout::justify(Justify::Center),
-        TextColor(color),
-        Transform::from_xyz(x, y, 10.0),
-    ));
+) -> Entity {
+    commands
+        .spawn((
+            Scene,
+            Text2d::new(text),
+            TextFont {
+                font_size: bevy::text::FontSize::Px(size.max(14.0 * scale)),
+                ..default()
+            },
+            TextLayout::justify(Justify::Center),
+            TextColor(color),
+            Transform::from_xyz(x, y, 10.0),
+        ))
+        .id()
 }
 fn rect(commands: &mut Commands, x: f32, y: f32, w: f32, h: f32, color: Color, angle: f32) {
     commands.spawn((
@@ -463,7 +599,9 @@ fn pulse_clear(
     }
 }
 fn platform_y(board: &Board, lane: usize) -> f32 {
-    320.0 - board.capacity(lane).unwrap_or(8) as f32 * ROW_HEIGHT
+    320.0
+        - (board.capacity(lane).unwrap_or(8 + board.bonus_rows()) - board.bonus_rows()) as f32
+            * ROW_HEIGHT
 }
 fn redraw(
     mut commands: Commands,
@@ -479,7 +617,8 @@ fn redraw(
         return;
     }
     *last_size = size;
-    let Some(scale) = view_scale(size.x, size.y) else {
+    let lift = board_lift(&field.board);
+    let Some(scale) = view_scale_for(size.x, size.y, field.board.bonus_rows()) else {
         return;
     };
     for entity in &scene {
@@ -488,21 +627,30 @@ fn redraw(
     label(
         &mut commands,
         format!(
-            "Level {} | Score {}",
+            "Level {} | Score {} | Rows +{}",
             field.progression.level(),
-            field.progression.score()
+            field.progression.score(),
+            field.board.bonus_rows()
         ),
         0.0,
-        1000.0,
+        1000.0 + lift,
         30.0,
         scale,
         INK,
     );
     label(
         &mut commands,
-        format!("Next level: {} points", field.progression.remaining()),
+        format!(
+            "Next: {} points{}",
+            field.progression.remaining(),
+            if field.board.expansion_achievement() {
+                " | 3 rows earned"
+            } else {
+                ""
+            }
+        ),
         0.0,
-        940.0,
+        940.0 + lift,
         20.0,
         scale,
         INK,
@@ -512,7 +660,7 @@ fn redraw(
         rect(
             &mut commands,
             x,
-            805.0,
+            805.0 + lift,
             88.0,
             200.0,
             Color::srgb(0.08, 0.14, 0.2),
@@ -525,7 +673,7 @@ fn redraw(
                     &mut meshes,
                     &mut materials,
                     ball,
-                    Vec2::new(x, 760.0 + index as f32 * ROW_HEIGHT),
+                    Vec2::new(x, 760.0 + lift + index as f32 * ROW_HEIGHT),
                     scale,
                     None,
                 );
@@ -535,7 +683,7 @@ fn redraw(
             &mut commands,
             format!("{}", lane + 1),
             x,
-            680.0,
+            680.0 + lift,
             20.0,
             scale,
             INK,
@@ -543,13 +691,13 @@ fn redraw(
         rect(
             &mut commands,
             x,
-            -40.0,
+            -105.0 + lift / 2.0,
             2.0,
-            760.0,
+            890.0 + lift,
             Color::srgb(0.1, 0.18, 0.25),
             0.0,
         );
-        label(
+        let total = label(
             &mut commands,
             field.board.total(lane).to_string(),
             x,
@@ -558,6 +706,7 @@ fn redraw(
             scale,
             INK,
         );
+        commands.entity(total).insert(StackTotal(lane));
         let base = platform_y(&field.board, lane);
         rect(&mut commands, x, base, 80.0, 12.0, INK, 0.0);
         for (index, ball) in field
@@ -587,7 +736,7 @@ fn redraw(
     rect(
         &mut commands,
         x,
-        570.0,
+        570.0 + lift,
         92.0,
         100.0,
         Color::srgb(0.4, 0.3, 0.12),
@@ -598,14 +747,14 @@ fn redraw(
         &mut meshes,
         &mut materials,
         field.supply.held(),
-        Vec2::new(x, 570.0),
+        Vec2::new(x, 570.0 + lift),
         scale,
         None,
     );
     rect(
         &mut commands,
         x,
-        510.0,
+        510.0 + lift,
         92.0,
         18.0,
         Color::srgb(0.95, 0.75, 0.3),
@@ -614,7 +763,7 @@ fn redraw(
     rect(
         &mut commands,
         x,
-        480.0,
+        480.0 + lift,
         24.0,
         40.0,
         Color::srgb(0.95, 0.75, 0.3),
@@ -683,6 +832,32 @@ fn redraw(
         );
     }
 }
+// Prediction runs only when board, chute or held supply changes. Animation only
+// touches these eight text colors; it never changes totals or the field resource.
+fn predict_reversal(field: Res<Playfield>, mut warning: ResMut<ReversalWarning>) {
+    if !field.is_changed() {
+        return;
+    }
+    warning.0 = (!field.game_over
+        && field.error.is_none()
+        && resolution::would_reverse(&field.board, field.chute.lane(), field.supply.held()))
+    .then_some(field.chute.lane());
+}
+fn pulse_reversal(
+    time: Res<Time>,
+    warning: Res<ReversalWarning>,
+    mut totals: Query<(&StackTotal, &mut TextColor)>,
+) {
+    let blend = (1.0 - (time.elapsed_secs() * std::f32::consts::TAU * 2.0).cos()) * 0.5;
+    let amber = Color::srgb(1.0, 0.53, 0.19);
+    for (total, mut color) in &mut totals {
+        color.0 = if warning.0 == Some(total.0) {
+            INK.mix(&amber, blend)
+        } else {
+            INK
+        };
+    }
+}
 fn pan(
     mut wheels: MessageReader<bevy::input::mouse::MouseWheel>,
     touches: Res<Touches>,
@@ -691,7 +866,8 @@ fn pan(
     mut field: ResMut<Playfield>,
     mut carry: Local<f32>,
 ) {
-    let Some(scale) = view_scale(window.width(), window.height()) else {
+    let Some(scale) = view_scale_for(window.width(), window.height(), field.board.bonus_rows())
+    else {
         return;
     };
     let mut rows = 0i32;
@@ -763,12 +939,17 @@ fn input(
                 .then(|| window.cursor_position())
                 .flatten()
         });
-    if let (Some(position), Some(scale)) = (pointer, view_scale(window.width(), window.height())) {
+    if let (Some(position), Some(scale)) = (
+        pointer,
+        view_scale_for(window.width(), window.height(), field.board.bonus_rows()),
+    ) {
         let point = Vec2::new(
             (position.x - window.width() / 2.0) * scale,
-            (window.height() / 2.0 - position.y) * scale,
+            (window.height() / 2.0 - position.y) * scale + board_lift(&field.board) / 2.0,
         );
-        if (-400.0..=400.0).contains(&point.x) && (-640.0..=640.0).contains(&point.y) {
+        if (-400.0..=400.0).contains(&point.x)
+            && (-640.0..=640.0 + board_lift(&field.board)).contains(&point.y)
+        {
             field
                 .chute
                 .select_fraction((point.x - LEFT) / (LANE * LANE_COUNT as f32));
@@ -785,12 +966,15 @@ fn input(
 }
 #[derive(Clone)]
 enum Path {
-    Drop,
+    Drop {
+        start_y: f32,
+    },
     Launch {
         origin: usize,
         distance: u64,
         rightward: bool,
         start_y: f32,
+        edge_from: Option<BallKind>,
     },
 }
 #[derive(Clone)]
@@ -806,6 +990,7 @@ struct Motion {
     active: Option<Transit>,
     queued: VecDeque<Transit>,
     incoming: Vec<(u64, Transit)>,
+    flashes: Vec<Flash>,
     next_id: u64,
     revision: u64,
 }
@@ -833,8 +1018,69 @@ impl Motion {
     fn clear(&mut self) {
         self.queued.clear();
         self.incoming.clear();
+        self.flashes.clear();
         self.active = None;
         self.revision = self.revision.wrapping_add(1);
+    }
+}
+#[derive(Clone)]
+struct Flash {
+    id: u64,
+    position: Vec2,
+    size: Vec2,
+    color: Color,
+    started: f64,
+}
+#[derive(Component)]
+struct EffectVisual(u64);
+fn flash(motion: &mut Motion, position: Vec2, size: Vec2, color: Color, started: f64) {
+    motion.next_id = motion.next_id.wrapping_add(1).max(1);
+    let id = motion.next_id;
+    motion.flashes.push(Flash {
+        id,
+        position,
+        size,
+        color,
+        started,
+    });
+}
+fn draw_effects(
+    mut commands: Commands,
+    state: (Res<Playfield>, Res<Motion>, Res<Time>),
+    mut visuals: Query<(Entity, &EffectVisual, &mut Sprite, &mut Transform)>,
+) {
+    let (field, motion, time) = state;
+    let mut seen = Vec::new();
+    for (entity, visual, mut sprite, mut transform) in &mut visuals {
+        if let Some(effect) = motion.flashes.iter().find(|effect| effect.id == visual.0) {
+            let t = ((time.elapsed_secs_f64() - effect.started) / 0.4).clamp(0.0, 1.0) as f32;
+            let color = effect.color.to_srgba();
+            sprite.color =
+                Color::srgba(color.red, color.green, color.blue, color.alpha * (1.0 - t));
+            transform.scale = Vec3::splat(1.0 + 0.12 * t);
+            transform.translation.y = effect.position.y - field.offset as f32 * ROW_HEIGHT;
+            seen.push(effect.id);
+        } else {
+            commands.entity(entity).despawn();
+        }
+    }
+    for effect in &motion.flashes {
+        if !seen.contains(&effect.id) {
+            let color = effect.color.to_srgba();
+            let t = ((time.elapsed_secs_f64() - effect.started) / 0.4).clamp(0.0, 1.0) as f32;
+            commands.spawn((
+                EffectVisual(effect.id),
+                Sprite::from_color(
+                    Color::srgba(color.red, color.green, color.blue, color.alpha * (1.0 - t)),
+                    effect.size,
+                ),
+                Transform::from_xyz(
+                    effect.position.x,
+                    effect.position.y - field.offset as f32 * ROW_HEIGHT,
+                    50.0,
+                ),
+            ));
+        }
     }
 }
 #[derive(Component)]
@@ -862,15 +1108,16 @@ fn transit_position(transit: &Transit, board: &Board, offset: usize) -> Vec2 {
     let t = (transit.elapsed / transit.duration).clamp(0.0, 1.0);
     let target = landing_y(board, transit.destination) - offset as f32 * ROW_HEIGHT;
     match transit.path {
-        Path::Drop => Vec2::new(
+        Path::Drop { start_y } => Vec2::new(
             lane_x(transit.destination),
-            570.0 + (target - 570.0) * t * t,
+            start_y + (target - start_y) * t * t,
         ),
         Path::Launch {
             origin,
             distance,
             rightward,
             start_y,
+            ..
         } => {
             let steps = visible_steps(distance);
             let direction = if rightward { 1.0 } else { -1.0 };
@@ -893,6 +1140,56 @@ fn apply_outcome(
     at: f64,
 ) {
     field.game_over = outcome.game_over;
+    for center in &outcome.blast_centers {
+        let y = 320.0 - 9.0 * ROW_HEIGHT + ROW_HEIGHT / 2.0 + center.row as f32 * ROW_HEIGHT;
+        flash(
+            motion,
+            Vec2::new(lane_x(center.lane), y),
+            Vec2::splat(ROW_HEIGHT * 3.0),
+            Color::srgba(1.0, 0.26, 0.08, 0.24),
+            at,
+        );
+    }
+    if outcome.silver_clears > 0 {
+        flash(
+            motion,
+            Vec2::new(0.0, -115.0 + board_lift(&field.board) / 2.0),
+            Vec2::new(800.0, 890.0 + board_lift(&field.board)),
+            Color::srgba(0.8, 0.88, 1.0, 0.16),
+            at,
+        );
+    }
+    if outcome.expansions > 0 {
+        flash(
+            motion,
+            Vec2::new(0.0, 320.0 + board_lift(&field.board) - ROW_HEIGHT / 2.0),
+            Vec2::new(800.0, ROW_HEIGHT),
+            Color::srgba(1.0, 0.75, 0.15, 0.24),
+            at,
+        );
+    }
+
+    for reward in &outcome.rewards {
+        if let Err(reason) =
+            field
+                .supply
+                .insert_reward_front_count(reward.lane, reward.ball.clone(), reward.count)
+        {
+            error!(event="reward_delivery_failed",error=?reason,"Reward delivery failed");
+            field.undelivered_rewards.push(reward.clone());
+            field.error = Some("Reward delivery paused - Backspace to reset");
+        } else {
+            info!(event="reward_queued",lane=reward.lane,count=reward.count,kind=?reward.ball.kind,"Earned reward inserted before previews");
+        }
+    }
+    info!(
+        event = "special_effects",
+        blasted = outcome.blasted_count,
+        silver_clears = outcome.silver_clears,
+        expansions = outcome.expansions,
+        stars_earned = outcome.stars_earned,
+        "Special effects resolved"
+    );
     let previous = field.config.level;
     field.config.level = field.progression.level();
     info!(
@@ -932,7 +1229,8 @@ fn apply_outcome(
             weight = flight.ball.weight,
             "Ball launched"
         );
-        let start_y = 320.0 - flight.origin_capacity as f32 * ROW_HEIGHT
+        let start_y = 320.0
+            - (flight.origin_capacity - flight.origin_bonus_rows) as f32 * ROW_HEIGHT
             + ROW_HEIGHT / 2.0
             + flight.origin_index as f32 * ROW_HEIGHT;
         let duration = 0.9 + visible_steps(flight.distance) * 0.04;
@@ -944,6 +1242,7 @@ fn apply_outcome(
                 distance: flight.distance,
                 rightward: flight.origin.is_multiple_of(2),
                 start_y,
+                edge_from: flight.edge_from,
             },
             elapsed: 0.0,
             duration,
@@ -1001,6 +1300,7 @@ fn animate(
     mut clearing: ResMut<Clearing>,
 ) {
     let now = time.elapsed_secs_f64();
+    motion.flashes.retain(|effect| now - effect.started < 0.4);
     if field.feedback.is_some() && now >= field.feedback_until {
         field.feedback = None;
     }
@@ -1103,30 +1403,83 @@ fn animate(
         field.busy = busy;
     }
 }
+fn visual_ball(transit: &Transit) -> Ball {
+    if let Path::Launch {
+        origin,
+        distance,
+        rightward,
+        edge_from: Some(kind),
+        ..
+    } = transit.path
+    {
+        let to_edge = if rightward {
+            (LANE_COUNT - origin) as f32 - 0.5
+        } else {
+            origin as f32 + 0.5
+        };
+        let edge_at = to_edge / visible_steps(distance).max(1.0);
+        if transit.elapsed / transit.duration < edge_at {
+            return match kind {
+                BallKind::SilverStar => Ball::silver_star(),
+                BallKind::GoldStar => Ball::gold_star(),
+                _ => transit.ball.clone(),
+            };
+        }
+    }
+    transit.ball.clone()
+}
+#[derive(Default)]
+struct MotionCache {
+    revision: Option<u64>,
+    scale: f32,
+    kinds: Vec<(u64, BallKind)>,
+}
 fn draw_motion(
     mut commands: Commands,
     state: (Res<Playfield>, Res<Motion>),
     window: Single<&Window, With<PrimaryWindow>>,
     assets: (ResMut<Assets<Mesh>>, ResMut<Assets<ColorMaterial>>),
     mut visuals: Query<(Entity, &mut Transform, &TransitVisual)>,
-    mut cache: Local<(Option<u64>, f32)>,
+    mut cache: Local<MotionCache>,
 ) {
     let (field, motion) = state;
     let (mut meshes, mut materials) = assets;
-    let Some(scale) = view_scale(window.width(), window.height()) else {
+    let Some(scale) = view_scale_for(window.width(), window.height(), field.board.bonus_rows())
+    else {
         return;
     };
-    let rebuild = cache.0 != Some(motion.revision) || cache.1 != scale;
+    let kinds = motion
+        .transits()
+        .map(|(id, transit)| (id, visual_ball(transit).kind))
+        .collect::<Vec<_>>();
+    let rebuild =
+        cache.revision != Some(motion.revision) || cache.scale != scale || cache.kinds != kinds;
     if rebuild {
         for (entity, _, _) in &mut visuals {
             commands.entity(entity).despawn();
         }
-        cache.0 = Some(motion.revision);
-        cache.1 = scale;
+        for (id, kind) in &kinds {
+            if *kind == BallKind::Bomb
+                && cache.kinds.iter().any(|(previous_id, previous)| {
+                    previous_id == id
+                        && matches!(previous, BallKind::SilverStar | BallKind::GoldStar)
+                })
+            {
+                info!(
+                    event = "edge_conversion",
+                    transit = id,
+                    "Star visibly crossed the edge and became bomb10"
+                );
+            }
+        }
+        cache.revision = Some(motion.revision);
+        cache.scale = scale;
+        cache.kinds = kinds;
         for (id, active) in motion.transits() {
             let position = transit_position(active, &field.board, field.offset);
             let radius = ball_visual::radius(scale);
-            let visual = ball_visual::build(&active.ball, &mut meshes, &mut materials, scale);
+            let visual =
+                ball_visual::build(&visual_ball(active), &mut meshes, &mut materials, scale);
             commands
                 .spawn((
                     TransitVisual { target: false, id },
@@ -1191,16 +1544,26 @@ fn main() {
 mod tests {
     use super::*;
     use bevy::input::touch::{TouchInput, TouchPhase};
+    fn test_field(level: NonZeroU32, seed: u64) -> Playfield {
+        let mut field =
+            Playfield::new(level, Random(seed)).unwrap_or_else(|error| panic!("fixture {error:?}"));
+        field.config.bomb_percent = 0;
+        field.random = Random(seed);
+        field.supply = Supply::new(field.config, &mut || field.random.next())
+            .unwrap_or_else(|error| panic!("fixture {error:?}"));
+        field
+    }
     fn input_app() -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
-            .insert_resource(
-                Playfield::new(NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN), Random(7))
-                    .unwrap_or_else(|e| panic!("fixture: {e:?}")),
-            )
+            .insert_resource(test_field(NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN), 7))
             .init_resource::<Motion>()
             .init_resource::<Clearing>()
-            .add_systems(Update, (pan, input, animate).chain());
+            .init_resource::<ReversalWarning>()
+            .add_systems(
+                Update,
+                (pan, input, animate, predict_reversal, pulse_reversal).chain(),
+            );
         let window = app
             .world_mut()
             .spawn((
@@ -1243,6 +1606,75 @@ mod tests {
         app.update();
     }
     #[test]
+    fn hovered_reversal_warns_without_changing_totals_or_consuming_held() {
+        let (mut app, _) = input_app();
+        {
+            let mut field = app.world_mut().resource_mut::<Playfield>();
+            field.board.clear();
+            assert!(
+                field
+                    .board
+                    .place(1, Ball::normal(1, BallColors::single(ColorId::RED)))
+            );
+            fixture_held(
+                &mut field,
+                Ball::normal(3, BallColors::single(ColorId::BLUE)),
+            );
+        }
+        let total = app
+            .world_mut()
+            .spawn((StackTotal(0), Text2d::new("0"), TextColor(INK)))
+            .id();
+        let other = app.world_mut().spawn((StackTotal(1), TextColor(INK))).id();
+        key(&mut app, KeyCode::ArrowLeft);
+        assert_eq!(app.world().resource::<ReversalWarning>().0, Some(0));
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(125));
+        app.world_mut().run_schedule(Update);
+        assert_ne!(
+            app.world()
+                .get::<TextColor>(total)
+                .unwrap_or_else(|| panic!("total text"))
+                .0,
+            INK
+        );
+        assert_eq!(
+            app.world()
+                .get::<TextColor>(other)
+                .unwrap_or_else(|| panic!("other total text"))
+                .0,
+            INK
+        );
+        assert_eq!(
+            app.world()
+                .get::<Text2d>(total)
+                .unwrap_or_else(|| panic!("numeric total"))
+                .0,
+            "0"
+        );
+        key(&mut app, KeyCode::ArrowRight);
+        assert_eq!(app.world().resource::<ReversalWarning>().0, None);
+        assert_eq!(
+            app.world()
+                .get::<TextColor>(total)
+                .unwrap_or_else(|| panic!("total text"))
+                .0,
+            INK
+        );
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.board.total(0), 0);
+        assert_eq!(field.board.total(1), 1);
+        assert_eq!(field.supply.held().weight, 3);
+        assert!(app.world().resource::<Motion>().active.is_none());
+        key(&mut app, KeyCode::ArrowLeft);
+        app.world_mut().resource_mut::<Playfield>().game_over = true;
+        app.world_mut().run_schedule(Update);
+        assert_eq!(app.world().resource::<ReversalWarning>().0, None);
+        key(&mut app, KeyCode::Backspace);
+        assert_eq!(app.world().resource::<ReversalWarning>().0, None);
+    }
+    #[test]
     fn splitmix_sequence_is_repeatable_and_distinct() {
         let mut random = Random(0);
         assert_eq!(random.next(), 0xe220a8397b1dcdaf);
@@ -1269,6 +1701,7 @@ mod tests {
         board.place(
             0,
             Ball {
+                kind: BallKind::Normal,
                 weight: 2,
                 colors: BallColors::single(ColorId::RED),
             },
@@ -1312,6 +1745,7 @@ mod tests {
                 field.board.place(
                     0,
                     Ball {
+                        kind: BallKind::Normal,
                         weight: 1,
                         colors: BallColors::single(ColorId::RED),
                     },
@@ -1409,6 +1843,7 @@ mod tests {
                     field.board.place(
                         lane,
                         Ball {
+                            kind: BallKind::Normal,
                             weight: 1,
                             colors: BallColors::single(ColorId::new((row % 2) as u32)),
                         },
@@ -1442,6 +1877,7 @@ mod tests {
     }
     fn ball(weight: u32) -> Ball {
         Ball {
+            kind: BallKind::Normal,
             weight,
             colors: BallColors::single(ColorId::RED),
         }
@@ -1467,6 +1903,7 @@ mod tests {
             let mut field = app.world_mut().resource_mut::<Playfield>();
             field.config = GeneratorConfig::new(NonZeroU32::new(5).unwrap_or(NonZeroU32::MIN));
             field.config.joker_percent = 0;
+            field.config.bomb_percent = 0;
             field.supply =
                 Supply::new(field.config, &mut || 101).unwrap_or_else(|e| panic!("fixture {e:?}"));
             field.board.place(0, ball(3));
@@ -1526,6 +1963,7 @@ mod tests {
                     distance,
                     rightward,
                     start_y: 0.0,
+                    edge_from: None,
                 },
                 elapsed: 1.0,
                 duration: 1.0,
@@ -1551,6 +1989,7 @@ mod tests {
                 field.board.place(
                     0,
                     Ball {
+                        kind: BallKind::Normal,
                         weight: 1,
                         colors: BallColors::single(ColorId::new((row % 2) as u32)),
                     },
@@ -1562,7 +2001,7 @@ mod tests {
         app.world_mut().resource_mut::<Motion>().start(Transit {
             ball: ball(2),
             destination: 1,
-            path: Path::Drop,
+            path: Path::Drop { start_y: 570.0 },
             elapsed: 0.0,
             duration: 0.5,
         });
@@ -1623,8 +2062,7 @@ mod tests {
     }
     fn level_one_app() -> App {
         let (mut app, _) = input_app();
-        *app.world_mut().resource_mut::<Playfield>() =
-            Playfield::new(NonZeroU32::MIN, Random(31)).unwrap_or_else(|e| panic!("fixture {e:?}"));
+        *app.world_mut().resource_mut::<Playfield>() = test_field(NonZeroU32::MIN, 31);
         app
     }
     #[test]
@@ -1651,7 +2089,14 @@ mod tests {
         assert_eq!(field.config.level.get(), 2);
         assert_eq!(field.supply.held(), &ball(1));
         for lane in 0..LANE_COUNT {
-            assert_eq!(field.supply.previews(lane), Some(&[ball(1), ball(1)]));
+            if lane == 3 {
+                assert_eq!(
+                    field.supply.previews(lane),
+                    Some(&[Ball::silver_star(), ball(1)])
+                );
+            } else {
+                assert_eq!(field.supply.previews(lane), Some(&[ball(1), ball(1)]));
+            }
         }
         let mut random = field.random;
         let expected = field
@@ -1695,7 +2140,7 @@ mod tests {
             .push_back(Transit {
                 ball: ball(2),
                 destination: 0,
-                path: Path::Drop,
+                path: Path::Drop { start_y: 570.0 },
                 elapsed: 0.0,
                 duration: 0.5,
             });
@@ -1735,6 +2180,7 @@ mod tests {
             field.board.stack(6),
             Some(
                 [Ball {
+                    kind: BallKind::Normal,
                     weight: 6,
                     colors: BallColors::single(ColorId::YELLOW)
                 }]
@@ -1765,7 +2211,7 @@ mod tests {
         app.world_mut().resource_mut::<Motion>().start(Transit {
             ball: ball(u32::MAX),
             destination: 0,
-            path: Path::Drop,
+            path: Path::Drop { start_y: 570.0 },
             elapsed: 0.0,
             duration: 0.5,
         });
@@ -1800,6 +2246,7 @@ mod tests {
                     field.board.place(
                         left,
                         Ball {
+                            kind: BallKind::Normal,
                             weight,
                             colors: BallColors::single(ColorId::new(color)),
                         },
@@ -1809,6 +2256,7 @@ mod tests {
                     field.board.place(
                         left + 1,
                         Ball {
+                            kind: BallKind::Normal,
                             weight,
                             colors: BallColors::single(ColorId::new(color)),
                         },
@@ -1821,18 +2269,19 @@ mod tests {
             let mut motion = app.world_mut().resource_mut::<Motion>();
             motion.start(Transit {
                 ball: Ball {
+                    kind: BallKind::Normal,
                     weight: 1,
                     colors: BallColors::single(ColorId::new(99)),
                 },
                 destination: 7,
-                path: Path::Drop,
+                path: Path::Drop { start_y: 570.0 },
                 elapsed: 0.0,
                 duration: 0.5,
             });
             motion.queued.push_back(Transit {
                 ball: ball(42),
                 destination: 6,
-                path: Path::Drop,
+                path: Path::Drop { start_y: 570.0 },
                 elapsed: 0.0,
                 duration: 0.5,
             });
@@ -1959,6 +2408,7 @@ mod tests {
                     field.board.place(
                         lane,
                         Ball {
+                            kind: BallKind::Normal,
                             weight,
                             colors: BallColors::single(ColorId::new(id)),
                         },
@@ -1971,21 +2421,23 @@ mod tests {
             let mut motion = app.world_mut().resource_mut::<Motion>();
             motion.start(Transit {
                 ball: Ball {
+                    kind: BallKind::Normal,
                     weight: 1,
                     colors: BallColors::single(ColorId::new(99)),
                 },
                 destination: 7,
-                path: Path::Drop,
+                path: Path::Drop { start_y: 570.0 },
                 elapsed: 0.0,
                 duration: 1.0 / 6.0,
             });
             motion.drop(Transit {
                 ball: Ball {
+                    kind: BallKind::Normal,
                     weight: 1,
                     colors: BallColors::single(ColorId::BLUE),
                 },
                 destination: 0,
-                path: Path::Drop,
+                path: Path::Drop { start_y: 570.0 },
                 elapsed: 0.0,
                 duration: 1.5,
             });
@@ -1999,6 +2451,7 @@ mod tests {
             field.board.stack(0),
             Some(
                 [Ball {
+                    kind: BallKind::Normal,
                     weight: 1,
                     colors: BallColors::single(ColorId::BLUE)
                 }]
@@ -2151,7 +2604,11 @@ mod tests {
             .init_resource::<Assets<ColorMaterial>>();
         let colors = BallColors::new(&[ColorId::new(0), ColorId::new(6), ColorId::new(11)])
             .unwrap_or_else(|| panic!("fixture colors"));
-        let ball = Ball { weight: 12, colors };
+        let ball = Ball {
+            kind: BallKind::Normal,
+            weight: 12,
+            colors,
+        };
         let stationary = ball.clone();
         app.world_mut()
             .run_system_once(
@@ -2173,7 +2630,7 @@ mod tests {
         app.world_mut().resource_mut::<Motion>().start(Transit {
             ball,
             destination: 0,
-            path: Path::Drop,
+            path: Path::Drop { start_y: 570.0 },
             elapsed: 0.0,
             duration: 1.0 / 6.0,
         });
@@ -2249,6 +2706,183 @@ mod tests {
                 .and_then(|stack| stack.first())
                 .map(|ball| ball.colors.count()),
             Some(3)
+        );
+    }
+    #[test]
+    fn real_zero_weight_star_drop_merges_to_gold_without_score() {
+        let (mut app, _) = input_app();
+        *app.world_mut().resource_mut::<Playfield>() =
+            special_demo("merge").unwrap_or_else(|error| panic!("fixture {error:?}"));
+        key(&mut app, KeyCode::ArrowDown);
+        let incoming = app
+            .world()
+            .resource::<Motion>()
+            .active
+            .as_ref()
+            .unwrap_or_else(|| panic!("star incoming"));
+        assert_eq!(incoming.ball, Ball::silver_star());
+        step(&mut app, 0.17);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.board.stack(0), Some([Ball::gold_star()].as_slice()));
+        assert_eq!(field.progression.score(), 0);
+        assert_eq!(field.progression.level().get(), 1);
+        assert!(field.error.is_none());
+    }
+    #[test]
+    fn real_bomb_throw_chains_and_scores_only_after_feedback_window() {
+        let (mut app, _) = input_app();
+        *app.world_mut().resource_mut::<Playfield>() =
+            special_demo("bomb").unwrap_or_else(|error| panic!("fixture {error:?}"));
+        key(&mut app, KeyCode::ArrowDown);
+        step(&mut app, 0.17);
+        let field = app.world().resource::<Playfield>();
+        assert!((0..3).all(|lane| {
+            field
+                .board
+                .stack(lane)
+                .is_some_and(|stack| stack.is_empty())
+        }));
+        assert_eq!(field.board.total(3), 5);
+        assert_eq!(field.progression.score(), 0);
+        assert_eq!(app.world().resource::<Motion>().flashes.len(), 2);
+        step(&mut app, 0.46);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.progression.score(), 2600);
+        assert_eq!(field.progression.level().get(), 2);
+        assert_eq!(
+            field.supply.previews(0).map(|queue| queue[0].kind),
+            Some(BallKind::SilverStar)
+        );
+    }
+    #[test]
+    fn silver_whole_board_clear_scores_without_advancing_level() {
+        let (mut app, _) = input_app();
+        *app.world_mut().resource_mut::<Playfield>() =
+            special_demo("silver").unwrap_or_else(|error| panic!("fixture {error:?}"));
+        key(&mut app, KeyCode::ArrowDown);
+        step(&mut app, 0.17);
+        assert!(
+            (0..LANE_COUNT).all(|lane| app.world().resource::<Playfield>().board.total(lane) == 0)
+        );
+        assert_eq!(app.world().resource::<Playfield>().progression.score(), 0);
+        step(&mut app, 0.46);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.progression.score(), 1000);
+        assert_eq!(field.progression.level().get(), 1);
+        assert_eq!(field.progression.remaining(), 1000);
+    }
+    #[test]
+    fn third_gold_award_expands_ceiling_but_keeps_existing_stack_positions() {
+        let (mut app, _) = input_app();
+        *app.world_mut().resource_mut::<Playfield>() =
+            special_demo("gold").unwrap_or_else(|error| panic!("fixture {error:?}"));
+        let before = platform_y(&app.world().resource::<Playfield>().board, 7);
+        assert_eq!(app.world().resource::<Playfield>().board.bonus_rows(), 2);
+        key(&mut app, KeyCode::ArrowDown);
+        step(&mut app, 0.17);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.board.bonus_rows(), 3);
+        assert!(field.board.expansion_achievement());
+        assert_eq!(platform_y(&field.board, 7), before);
+        assert_eq!(field.board.stack(7), Some([Ball::stone()].as_slice()));
+        assert_eq!(field.board.capacity(7), Some(12));
+        assert!((0..5).all(|lane| {
+            field
+                .board
+                .stack(lane)
+                .is_some_and(|stack| stack.is_empty())
+        }));
+        let scale = view_scale_for(390.0, 844.0, 3).unwrap_or(1.0);
+        assert!(844.0 * scale >= HEIGHT + 3.0 * ROW_HEIGHT);
+        assert!(92.0 / scale >= 32.0);
+        key(&mut app, KeyCode::Backspace);
+        assert_eq!(app.world().resource::<Playfield>().board.bonus_rows(), 0);
+        assert!(app.world().resource::<Motion>().flashes.is_empty());
+    }
+    #[test]
+    fn silver_edge_visual_changes_once_but_owned_ball_is_already_bomb_ten() {
+        let (mut app, _) = input_app();
+        *app.world_mut().resource_mut::<Playfield>() =
+            special_demo("edge").unwrap_or_else(|error| panic!("fixture {error:?}"));
+        key(&mut app, KeyCode::ArrowDown);
+        step(&mut app, 0.17);
+        let active = app
+            .world()
+            .resource::<Motion>()
+            .active
+            .clone()
+            .unwrap_or_else(|| panic!("star flight"));
+        assert_eq!(active.ball, Ball::bomb());
+        assert!(matches!(
+            active.path,
+            Path::Launch {
+                origin: 1,
+                distance: 2,
+                edge_from: Some(BallKind::SilverStar),
+                ..
+            }
+        ));
+        assert_eq!(visual_ball(&active), Ball::silver_star());
+        let mut before = active.clone();
+        before.elapsed = before.duration * 0.74;
+        let mut after = active.clone();
+        after.elapsed = after.duration * 0.76;
+        assert_eq!(visual_ball(&before), Ball::silver_star());
+        assert_eq!(visual_ball(&after), Ball::bomb());
+        step(&mut app, 1.0);
+        assert_eq!(
+            app.world().resource::<Playfield>().board.stack(7),
+            Some([Ball::bomb()].as_slice())
+        );
+        assert!(app.world().resource::<Motion>().active.is_none());
+        key(&mut app, KeyCode::Backspace);
+        assert_eq!(app.world().resource::<Playfield>().board, Board::default());
+    }
+    #[test]
+    fn normal_session_has_no_initial_star_reward_and_reward_can_be_thrown_weightless() {
+        let field = Playfield::new(NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN), Random(9))
+            .unwrap_or_else(|error| panic!("fixture {error:?}"));
+        assert!(matches!(
+            field.supply.held().kind,
+            BallKind::Normal | BallKind::Bomb
+        ));
+        for lane in 0..LANE_COUNT {
+            assert!(field.supply.previews(lane).is_some_and(|queue| {
+                queue
+                    .iter()
+                    .all(|ball| matches!(ball.kind, BallKind::Normal | BallKind::Bomb))
+            }));
+        }
+        let (mut app, _) = input_app();
+        let old = app.world().resource::<Playfield>().supply.held().clone();
+        app.world_mut()
+            .resource_mut::<Playfield>()
+            .supply
+            .insert_reward_front(0, Ball::silver_star())
+            .unwrap_or_else(|error| panic!("reward {error:?}"));
+        key(&mut app, KeyCode::ArrowDown);
+        assert_eq!(
+            app.world().resource::<Playfield>().supply.held(),
+            &Ball::silver_star()
+        );
+        key(&mut app, KeyCode::ArrowRight);
+        key(&mut app, KeyCode::ArrowDown);
+        assert_eq!(
+            app.world()
+                .resource::<Motion>()
+                .incoming
+                .last()
+                .map(|(_, transit)| &transit.ball),
+            Some(&Ball::silver_star())
+        );
+        step(&mut app, 0.17);
+        assert_eq!(
+            app.world().resource::<Playfield>().board.stack(0),
+            Some([old].as_slice())
+        );
+        assert_eq!(
+            app.world().resource::<Playfield>().board.stack(1),
+            Some([Ball::silver_star()].as_slice())
         );
     }
 }

@@ -38,7 +38,7 @@ impl Board {
         if lane >= LANE_COUNT {
             return Err(LandingError::InvalidLane);
         }
-        if ball.weight == 0 {
+        if !ball.is_valid() {
             return Err(LandingError::ZeroWeight);
         }
         let seesaw = lane / 2;
@@ -64,7 +64,7 @@ impl Board {
             (origin + LANE_COUNT - steps) % LANE_COUNT
         };
         Ok(Some(Flight {
-            ball,
+            ball: crate::resolution::convert_edge(ball, origin, distance, rightward),
             origin,
             destination,
             distance,
@@ -78,6 +78,7 @@ mod tests {
     use crate::{BallColors, ColorId};
     fn ball(weight: u32) -> Ball {
         Ball {
+            kind: crate::BallKind::Normal,
             weight,
             colors: BallColors::single(ColorId::new(weight)),
         }
