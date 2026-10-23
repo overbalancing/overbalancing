@@ -361,6 +361,31 @@ fn special(
             }
             Color::BLACK
         }
+        BallKind::UltimateJoker => {
+            // Universal token: six colored lobes around a dark central zero,
+            // independent of the current level palette and its allocation size.
+            for index in 0..6 {
+                let angle = index as f32 * std::f32::consts::TAU / 6.0;
+                let points = (0..16)
+                    .map(|step| {
+                        let a = step as f32 * std::f32::consts::TAU / 16.0;
+                        Vec2::new(angle.cos(), angle.sin()) * radius * 0.55
+                            + Vec2::new(a.cos(), a.sin()) * radius * 0.40
+                    })
+                    .collect::<Vec<_>>();
+                add(
+                    polygon_mesh(&points),
+                    super::color(ColorId::new(index)),
+                    0.0,
+                );
+            }
+            add(
+                Circle::new(radius * 0.42).mesh().build(),
+                Color::srgb(0.08, 0.12, 0.20),
+                2.0,
+            );
+            Color::WHITE
+        }
         BallKind::Normal => Color::BLACK,
     };
     Visual {
@@ -469,7 +494,12 @@ mod tests {
         let mut meshes = Assets::<Mesh>::default();
         let mut materials = Assets::<ColorMaterial>::default();
         let mut signatures = Vec::new();
-        for ball in [Ball::row_laser(), Ball::column_laser(), Ball::feather()] {
+        for ball in [
+            Ball::row_laser(),
+            Ball::column_laser(),
+            Ball::feather(),
+            Ball::ultimate_joker(),
+        ] {
             let visual = build(&ball, &mut meshes, &mut materials, 2.5);
             assert_eq!(visual.kind, ball.kind);
             assert_eq!(visual.weight, "0");

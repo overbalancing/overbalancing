@@ -94,7 +94,7 @@ impl Playfield {
         let held = supply
             .take_and_refill(destination, next)
             .map_err(|_| "Unable to refill this lane")?;
-        info!(event="drop_started",lane=destination,weight=held.weight,colors=?held.colors,queue=motion.queued.len(),"Drop started and supply refilled");
+        info!(event="drop_started",lane=destination,kind=?held.kind,weight=held.weight,colors=?held.colors,queue=motion.queued.len(),"Drop started and supply refilled");
         motion.drop(Transit {
             ball: held,
             destination,
@@ -301,6 +301,37 @@ fn special_demo(mode: &str) -> Result<Playfield, GenerationError> {
             }
             fixture_held(&mut field, utility);
         }
+        "ultimate" => {
+            field.board.place(1, ordinary(1));
+            // Isolated universal token makes the opt-in visual fixture readable
+            // before the real launched clear earns another reward.
+            field.board.place(2, Ball::ultimate_joker());
+            for lane in 4..7 {
+                field.board.place(lane, ordinary(1));
+            }
+            fixture_held(
+                &mut field,
+                Ball::normal(3, BallColors::single(ColorId::BLUE)),
+            );
+        }
+        "order" => {
+            field = Playfield::new(
+                NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
+                Random::seeded(),
+            )?;
+            field.config.bomb_percent = 0;
+            field.config.joker_percent = 0;
+            let mut samples = [99, 0, 3, 99, 1, 1, 99, 0, 2].into_iter();
+            field.supply = Supply::new(field.config, &mut || samples.next().unwrap_or(u64::MAX))?;
+            field
+                .supply
+                .insert_reward_after_preview_count(0, Ball::silver_star(), 1)
+                .unwrap_or_else(|e| panic!("order fixture {e:?}"));
+            field
+                .supply
+                .insert_reward_after_preview_count(0, Ball::ultimate_joker(), 1)
+                .unwrap_or_else(|e| panic!("order fixture {e:?}"));
+        }
         "column-reward" => {
             for lane in 0..4 {
                 for _ in 0..4 {
@@ -423,6 +454,8 @@ pub fn run() {
         }
     };
     let special_mode = [
+        ("--reward-order-demo", "order"),
+        ("--ultimate-joker-demo", "ultimate"),
         ("--utility-row-demo", "row"),
         ("--utility-column-demo", "column"),
         ("--utility-feather-demo", "feather"),
@@ -1254,16 +1287,16 @@ fn apply_outcome(
     }
 
     for reward in &outcome.rewards {
-        if let Err(reason) =
-            field
-                .supply
-                .insert_reward_front_count(reward.lane, reward.ball.clone(), reward.count)
-        {
+        if let Err(reason) = field.supply.insert_reward_after_preview_count(
+            reward.lane,
+            reward.ball.clone(),
+            reward.count,
+        ) {
             error!(event="reward_delivery_failed",error=?reason,"Reward delivery failed");
             field.undelivered_rewards.push(reward.clone());
             field.error = Some("Reward delivery paused - Backspace to reset");
         } else {
-            info!(event="reward_queued",lane=reward.lane,count=reward.count,kind=?reward.ball.kind,"Earned reward inserted before previews");
+            info!(event="reward_queued",lane=reward.lane,count=reward.count,kind=?reward.ball.kind,"Earned reward queued after reserved next preview");
         }
     }
     info!(
@@ -1440,7 +1473,12 @@ fn animate(
             weight = landed.ball.weight,
             "Ball landed"
         );
-        match resolution::prepare_landing(
+        let prepare = if matches!(landed.path, Path::Launch { .. }) {
+            resolution::prepare_flight_landing
+        } else {
+            resolution::prepare_landing
+        };
+        match prepare(
             &mut field.board,
             &mut clearing.pending,
             landed.destination,
@@ -1836,7 +1874,7 @@ mod tests {
         }
     }
     #[test]
-    fn utility_empty_landing_is_inert_and_reward_clear_front_queues_utilities() {
+    fn utility_empty_landing_is_inert_and_rewards_preserve_reserved_preview() {
         let (mut app, _) = input_app();
         *app.world_mut().resource_mut::<Playfield>() =
             special_demo("inert").unwrap_or_else(|e| panic!("fixture {e:?}"));
@@ -1868,8 +1906,10 @@ mod tests {
             .supply
             .previews(5)
             .unwrap_or_else(|| panic!("reward lane"));
-        assert!(front.iter().any(|ball| ball.kind == BallKind::RowLaser));
-        assert!(front.iter().any(|ball| ball.kind == BallKind::Feather));
+        assert_eq!(front[0].kind, BallKind::Normal);
+        let kinds = queued_kinds(&field.supply, 5, 4);
+        assert!(kinds.contains(&BallKind::RowLaser));
+        assert!(kinds.contains(&BallKind::Feather));
     }
     #[test]
     fn real_column_reward_keeps_held_and_all_old_supply_entries() {
@@ -1883,13 +1923,92 @@ mod tests {
         let field = app.world().resource::<Playfield>();
         assert_eq!(field.progression.score(), 1700);
         assert_eq!(field.supply.held(), &held);
+        assert!(queued_kinds(&field.supply, 3, 4).contains(&BallKind::ColumnLaser));
+    }
+    fn queued_kinds(supply: &Supply, lane: usize, count: usize) -> Vec<BallKind> {
+        let mut copy = supply.clone();
+        (0..count)
+            .map(|_| {
+                copy.take_and_refill(lane, ball(1))
+                    .unwrap_or_else(|e| panic!("queue fixture {e:?}"));
+                copy.held().kind
+            })
+            .collect()
+    }
+    #[test]
+    fn real_immediate_drops_preserve_reserved_next_then_fifo_rewards_then_old_second() {
+        let (mut app, _) = input_app();
+        *app.world_mut().resource_mut::<Playfield>() =
+            special_demo("order").unwrap_or_else(|e| panic!("fixture {e:?}"));
+        let original = app.world().resource::<Playfield>().supply.clone();
+        let b = original.previews(0).unwrap_or_else(|| panic!("preview"))[0].clone();
+        let mut thrown = Vec::new();
+        for _ in 0..5 {
+            thrown.push(app.world().resource::<Playfield>().supply.held().clone());
+            key(&mut app, KeyCode::ArrowDown);
+        }
+        assert_eq!(thrown[1], b);
+        assert_eq!(
+            thrown.iter().map(|ball| ball.kind).collect::<Vec<_>>(),
+            [
+                BallKind::Normal,
+                BallKind::Normal,
+                BallKind::SilverStar,
+                BallKind::UltimateJoker,
+                BallKind::Normal
+            ]
+        );
+        assert_eq!(thrown[4].colors, BallColors::single(ColorId::YELLOW));
+        assert_eq!(app.world().resource::<Motion>().incoming.len(), 4);
+        key(&mut app, KeyCode::Backspace);
+        assert!(app.world().resource::<Motion>().active.is_none());
+        assert!(app.world().resource::<Motion>().incoming.is_empty());
         assert!(
-            field
-                .supply
-                .previews(3)
-                .unwrap_or_else(|| panic!("reward lane"))
+            !queued_kinds(&app.world().resource::<Playfield>().supply, 0, 3)
+                .contains(&BallKind::UltimateJoker)
+        );
+    }
+    #[test]
+    fn real_launch_clear_earns_one_ultimate_while_direct_clear_does_not() {
+        let (mut app, _) = input_app();
+        *app.world_mut().resource_mut::<Playfield>() =
+            special_demo("ultimate").unwrap_or_else(|e| panic!("fixture {e:?}"));
+        key(&mut app, KeyCode::ArrowDown);
+        step(&mut app, 0.17);
+        assert!(matches!(
+            app.world()
+                .resource::<Motion>()
+                .active
+                .as_ref()
+                .map(|t| &t.path),
+            Some(Path::Launch { .. })
+        ));
+        step(&mut app, 1.0);
+        assert_eq!(app.world().resource::<Playfield>().progression.score(), 0);
+        step(&mut app, 0.46);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.progression.score(), 400);
+        assert_eq!(
+            queued_kinds(&field.supply, 7, 5)
                 .iter()
-                .any(|ball| ball.kind == BallKind::ColumnLaser)
+                .filter(|kind| **kind == BallKind::UltimateJoker)
+                .count(),
+            1
+        );
+        key(&mut app, KeyCode::Backspace);
+        assert!(app.world().resource::<Clearing>().pending.is_empty());
+        assert!(
+            !queued_kinds(&app.world().resource::<Playfield>().supply, 7, 5)
+                .contains(&BallKind::UltimateJoker)
+        );
+        *app.world_mut().resource_mut::<Playfield>() =
+            special_demo("reward").unwrap_or_else(|e| panic!("fixture {e:?}"));
+        key(&mut app, KeyCode::ArrowDown);
+        step(&mut app, 0.17);
+        step(&mut app, 0.46);
+        assert!(
+            !queued_kinds(&app.world().resource::<Playfield>().supply, 5, 5)
+                .contains(&BallKind::UltimateJoker)
         );
     }
     #[test]
@@ -2954,7 +3073,7 @@ mod tests {
         assert_eq!(field.progression.score(), 2600);
         assert_eq!(field.progression.level().get(), 2);
         assert_eq!(
-            field.supply.previews(0).map(|queue| queue[0].kind),
+            field.supply.previews(0).map(|queue| queue[1].kind),
             Some(BallKind::SilverStar)
         );
     }
