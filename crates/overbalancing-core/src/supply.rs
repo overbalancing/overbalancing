@@ -97,7 +97,7 @@ impl GeneratorConfig {
 pub enum SupplyError {
     /// No preview lane exists at that index.
     InvalidLane,
-    /// A zero-weight replacement cannot enter the supply.
+    /// The replacement violates kind-specific weight or palette invariants.
     ZeroWeight,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -348,7 +348,7 @@ mod tests {
             Err(SupplyError::InvalidLane)
         );
         let mut zero = before.held.clone();
-        zero.weight = 0;
+        zero.colors = BallColors::none();
         assert_eq!(
             supply.take_and_refill(0, zero),
             Err(SupplyError::ZeroWeight)

@@ -9,7 +9,7 @@ use crate::{
 pub enum ResolutionError {
     /// No lane exists at this index.
     InvalidLane,
-    /// Landing requires a positive ball weight.
+    /// Landing requires kind-valid weight and palette invariants.
     ZeroWeight,
     /// Five compressed weights cannot be represented by a ball's u32 weight.
     WeightOverflow,
@@ -61,6 +61,18 @@ pub struct Outcome {
     pub expansions: usize,
     /// Snapshot coordinates of every bomb detonated.
     pub blast_centers: Vec<PhysicalPosition>,
+    /// Activated utilities, with their original contact geometry.
+    pub utility_effects: Vec<UtilityEffect>,
+}
+/// One consumed utility's authoritative activation feedback.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UtilityEffect {
+    /// Activated row laser, column laser or feather.
+    pub kind: BallKind,
+    /// Utility's physical position before area removals or weight changes.
+    pub position: PhysicalPosition,
+    /// Other balls targeted by the effect, excluding the consumed utility.
+    pub affected_count: usize,
 }
 /// Earned supply ball with immutable causal lane provenance.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -142,6 +154,7 @@ fn empty_outcome() -> Outcome {
         silver_clears: 0,
         expansions: 0,
         blast_centers: Vec::new(),
+        utility_effects: Vec::new(),
     }
 }
 fn compress(board: &mut Board, pending: &mut PendingClear) -> Result<usize, ResolutionError> {
@@ -305,6 +318,111 @@ fn horizontal_special(board: &Board, kind: BallKind, minimum: usize) -> Vec<Vec<
     }
     groups
 }
+fn touches_positive(board: &Board, cell: matching::Cell) -> bool {
+    let stack = &board.stacks[cell.lane];
+    cell.index
+        .checked_sub(1)
+        .and_then(|index| stack.get(index))
+        .is_some_and(|ball| ball.weight > 0)
+        || stack
+            .get(cell.index + 1)
+            .is_some_and(|ball| ball.weight > 0)
+}
+fn remap_snapshot(
+    cell: matching::Cell,
+    removed: &std::collections::BTreeSet<matching::Cell>,
+) -> Option<matching::Cell> {
+    if removed.contains(&cell) {
+        return None;
+    }
+    Some(matching::Cell {
+        lane: cell.lane,
+        index: cell.index
+            - removed
+                .iter()
+                .filter(|old| old.lane == cell.lane && old.index < cell.index)
+                .count(),
+    })
+}
+struct UtilityContact {
+    source: matching::Cell,
+    kind: BallKind,
+    position: PhysicalPosition,
+    targets: Vec<matching::Cell>,
+}
+// Capture simultaneous contacts and physical targets before modifying the board.
+// Original identities are remapped through each prior effect; destroying a queued
+// utility discards its event rather than synthesizing a second activation.
+fn activate_utilities(
+    board: &mut Board,
+    pending: &mut PendingClear,
+    outcome: &mut Outcome,
+) -> Result<bool, ResolutionError> {
+    let snapshot = all_cells(board);
+    let contacts: Vec<_> = snapshot
+        .iter()
+        .copied()
+        .filter_map(|source| {
+            let kind = board.stacks[source.lane][source.index].kind;
+            if !matches!(
+                kind,
+                BallKind::RowLaser | BallKind::ColumnLaser | BallKind::Feather
+            ) || !touches_positive(board, source)
+            {
+                return None;
+            }
+            let position = position(board, source);
+            let targets = snapshot
+                .iter()
+                .copied()
+                .filter(|cell| match kind {
+                    BallKind::RowLaser => self::position(board, *cell).row == position.row,
+                    BallKind::ColumnLaser | BallKind::Feather => cell.lane == source.lane,
+                    _ => false,
+                })
+                .collect();
+            Some(UtilityContact {
+                source,
+                kind,
+                position,
+                targets,
+            })
+        })
+        .collect();
+    let activated = !contacts.is_empty();
+    let mut removed = std::collections::BTreeSet::new();
+    for contact in contacts {
+        let Some(source) = remap_snapshot(contact.source, &removed) else {
+            continue;
+        };
+        let current: Vec<_> = contact
+            .targets
+            .iter()
+            .filter_map(|cell| remap_snapshot(*cell, &removed))
+            .collect();
+        if contact.kind == BallKind::Feather {
+            remove_cells(board, pending, &[source]);
+            removed.insert(contact.source);
+            for original in &contact.targets {
+                if let Some(cell) = remap_snapshot(*original, &removed) {
+                    board.stacks[cell.lane][cell.index].weight = 0;
+                }
+            }
+            outcome.cleared_count += 1;
+        } else {
+            defer_score(board, pending, &current, false)?;
+            remove_cells(board, pending, &current);
+            removed.extend(contact.targets.iter().copied());
+            outcome.cleared_count += current.len();
+        }
+        outcome.utility_effects.push(UtilityEffect {
+            kind: contact.kind,
+            position: contact.position,
+            affected_count: current.len().saturating_sub(1),
+        });
+    }
+    Ok(activated)
+}
 // Immediate special effects never dispatch the effects of destroyed non-bomb specials.
 fn resolve_specials(
     board: &mut Board,
@@ -320,16 +438,7 @@ fn resolve_specials(
             .copied()
             .filter(|cell| board.stacks[cell.lane][cell.index].kind == BallKind::Bomb)
         {
-            let stack = &board.stacks[cell.lane];
-            if cell
-                .index
-                .checked_sub(1)
-                .and_then(|index| stack.get(index))
-                .is_some_and(|ball| ball.weight > 0)
-                || stack
-                    .get(cell.index + 1)
-                    .is_some_and(|ball| ball.weight > 0)
-            {
+            if touches_positive(board, cell) {
                 bombs.push(cell);
             }
         }
@@ -358,6 +467,12 @@ fn resolve_specials(
             outcome.blasted_count += cells.len();
             outcome.cleared_count += cells.len();
             remove_cells(board, pending, &cells);
+            changed = true;
+            continue;
+        }
+        if activate_utilities(board, pending, outcome)? {
+            changed = true;
+            continue;
         }
         let mut merged = false;
         for lane in 0..LANE_COUNT {
@@ -484,6 +599,85 @@ pub fn prepare_landing(
     *pending = next_pending;
     Ok(outcome)
 }
+fn count_runs(values: impl IntoIterator<Item = usize>, minimum: usize) -> usize {
+    let mut previous: Option<usize> = None;
+    let mut length = 0;
+    let mut count = 0;
+    for value in values {
+        if previous.and_then(|old| old.checked_add(1)) != Some(value) {
+            count += usize::from(length >= minimum);
+            length = 0;
+        }
+        length += 1;
+        previous = Some(value);
+    }
+    count + usize::from(length >= minimum)
+}
+fn clear_rewards(
+    board: &Board,
+    selected: &[matching::Cell],
+    lane: usize,
+) -> Result<Vec<Reward>, ResolutionError> {
+    use std::collections::{BTreeMap, BTreeSet};
+    if selected.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cells: BTreeSet<_> = selected.iter().copied().collect();
+    let mut rows = BTreeMap::<usize, BTreeMap<usize, matching::Cell>>::new();
+    let mut columns = BTreeMap::<usize, BTreeSet<usize>>::new();
+    for cell in &cells {
+        rows.entry(position(board, *cell).row)
+            .or_default()
+            .insert(cell.lane, *cell);
+        columns.entry(cell.lane).or_default().insert(cell.index);
+    }
+    // Adjacent selected balls still need a shared-color edge: independent red
+    // and blue clears touching in one row do not form a five-ball matching run.
+    let mut row_count = 0usize;
+    for row in rows.values() {
+        let mut previous: Option<matching::Cell> = None;
+        let mut length = 0;
+        for cell in row.values().copied() {
+            let linked = previous.is_some_and(|old| {
+                old.lane + 1 == cell.lane
+                    && board.stacks[old.lane][old.index]
+                        .colors
+                        .iter()
+                        .any(|color| board.stacks[cell.lane][cell.index].colors.contains(color))
+            });
+            if !linked {
+                row_count += usize::from(length >= 5);
+                length = 0;
+            }
+            length += 1;
+            previous = Some(cell);
+        }
+        row_count += usize::from(length >= 5);
+    }
+    let qualified_columns = columns.iter().filter_map(|(lane, indices)| {
+        (count_runs(indices.iter().copied(), 4) > 0).then_some(*lane)
+    });
+    let column_count = count_runs(qualified_columns, 3);
+    let feather = cells
+        .iter()
+        .all(|cell| board.balance(cell.lane / 2) == Some(Balance::Balanced));
+    let mut rewards = Vec::new();
+    for (ball, count) in [
+        (Ball::row_laser(), row_count),
+        (Ball::column_laser(), column_count),
+        (Ball::feather(), usize::from(feather)),
+    ] {
+        if count > 0 {
+            rewards.push(Reward {
+                lane,
+                ball,
+                count: u32::try_from(count)
+                    .map_err(|_| ResolutionError::Score(ScoreError::Overflow))?,
+            });
+        }
+    }
+    Ok(rewards)
+}
 /// Commit marked removals and points atomically, then prepare the next clear phase.
 /// Sticky membership uses identities maintained only by this API; callers must not
 /// mutate board stacks between preparation and commit except via prepare_landing.
@@ -501,6 +695,7 @@ pub fn commit_clear(
     let mut next_progression = progression.clone();
     let mut next_pending = pending.clone();
     let before = balances(&candidate);
+    let rewards = clear_rewards(&candidate, &next_pending.cells, next_pending.trigger_lane)?;
     let ordinary =
         scoring::score_cells(&candidate, &next_pending.cells).map_err(ResolutionError::Score)?;
     let eligible = ordinary
@@ -535,6 +730,7 @@ pub fn commit_clear(
             count: reward_count,
         });
     }
+    outcome.rewards.extend(rewards);
     *board = candidate;
     *progression = next_progression;
     *pending = next_pending;
@@ -567,6 +763,7 @@ pub fn land(
         outcome.silver_clears += next.silver_clears;
         outcome.expansions += next.expansions;
         outcome.blast_centers.extend(next.blast_centers);
+        outcome.utility_effects.extend(next.utility_effects);
         outcome.game_over = next.game_over;
     }
     *board = candidate;
@@ -1055,7 +1252,12 @@ mod tests {
             Err(ResolutionError::InvalidLane)
         );
         assert_eq!(
-            land(&mut board, &mut progression, 0, ball(0, &[0])),
+            land(
+                &mut board,
+                &mut progression,
+                0,
+                Ball::normal(0, BallColors::none())
+            ),
             Err(ResolutionError::ZeroWeight)
         );
         assert_eq!(board, before);
@@ -1380,7 +1582,7 @@ mod special_tests {
             Ball {
                 kind: BallKind::Normal,
                 weight: 0,
-                colors: BallColors::single(ColorId::RED),
+                colors: BallColors::none(),
             },
         ] {
             assert!(!board.place(0, invalid.clone()));
@@ -1461,7 +1663,14 @@ mod special_tests {
         let effect = land(&mut board, &mut score, 3, ordinary(u32::MAX, 0))
             .unwrap_or_else(|error| panic!("{error:?}"));
         assert!(effect.stars_earned > 1000);
-        assert_eq!(effect.rewards.len(), 1);
+        assert_eq!(
+            effect
+                .rewards
+                .iter()
+                .filter(|reward| reward.ball.kind == BallKind::SilverStar)
+                .count(),
+            1
+        );
         assert_eq!(effect.rewards[0].count, effect.stars_earned);
         assert_eq!(effect.rewards[0].lane, 3);
         assert_eq!(effect.stars_earned, score.level().get() - 1);
@@ -1690,3 +1899,7 @@ mod special_tests {
         assert_eq!(real.flights[0].ball.weight, u32::MAX);
     }
 }
+
+#[cfg(test)]
+#[path = "utility_tests.rs"]
+mod utility_tests;

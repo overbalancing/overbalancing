@@ -310,6 +310,57 @@ fn special(
             add(polygon_mesh(&face), Color::srgb(0.65, 0.69, 0.72), 1.0);
             Color::BLACK
         }
+        BallKind::RowLaser | BallKind::ColumnLaser => {
+            // Original filled double-arrow silhouette; its axis encodes effect.
+            let points = [
+                (-0.96, 0.0),
+                (-0.55, 0.48),
+                (-0.55, 0.23),
+                (0.55, 0.23),
+                (0.55, 0.48),
+                (0.96, 0.0),
+                (0.55, -0.48),
+                (0.55, -0.23),
+                (-0.55, -0.23),
+                (-0.55, -0.48),
+            ]
+            .map(|(x, y)| {
+                if ball.kind == BallKind::ColumnLaser {
+                    Vec2::new(-y, x) * radius
+                } else {
+                    Vec2::new(x, y) * radius
+                }
+            });
+            add(polygon_mesh(&points), Color::srgb(0.78, 0.94, 1.0), 0.0);
+            Color::BLACK
+        }
+        BallKind::Feather => {
+            let points = [
+                (-0.7, -0.82),
+                (-0.58, -0.18),
+                (-0.24, 0.50),
+                (0.32, 0.92),
+                (0.70, 0.66),
+                (0.64, 0.12),
+                (0.25, -0.38),
+            ]
+            .map(|(x, y)| Vec2::new(x, y) * radius);
+            add(polygon_mesh(&points), Color::srgb(0.72, 0.94, 0.86), 0.0);
+            let shaft = [(-0.70, -0.84), (-0.62, -0.89), (0.43, 0.65), (0.35, 0.70)]
+                .map(|(x, y)| Vec2::new(x, y) * radius);
+            add(polygon_mesh(&shaft), Color::srgb(0.22, 0.51, 0.44), 1.0);
+            for (x, y) in [(0.15, 0.40), (0.28, 0.57), (0.40, 0.72)] {
+                let barb = [
+                    Vec2::new(x, y),
+                    Vec2::new(x + 0.24, y - 0.02),
+                    Vec2::new(x + 0.22, y - 0.07),
+                    Vec2::new(x - 0.03, y - 0.04),
+                ]
+                .map(|p| p * radius);
+                add(polygon_mesh(&barb), Color::srgb(0.22, 0.51, 0.44), 1.0);
+            }
+            Color::BLACK
+        }
         BallKind::Normal => Color::BLACK,
     };
     Visual {
@@ -413,6 +464,42 @@ pub(super) fn spawn(children: &mut ChildSpawnerCommands<'_>, visual: Visual) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn utility_visuals_are_distinct_zero_weight_and_zeroed_kinds_keep_identity() {
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<ColorMaterial>::default();
+        let mut signatures = Vec::new();
+        for ball in [Ball::row_laser(), Ball::column_laser(), Ball::feather()] {
+            let visual = build(&ball, &mut meshes, &mut materials, 2.5);
+            assert_eq!(visual.kind, ball.kind);
+            assert_eq!(visual.weight, "0");
+            let positions = visual
+                .parts
+                .iter()
+                .map(|part| {
+                    format!(
+                        "{:?}",
+                        meshes
+                            .get(&part.mesh)
+                            .and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_POSITION))
+                    )
+                })
+                .collect::<Vec<_>>();
+            signatures.push(positions);
+        }
+        assert_ne!(signatures[0], signatures[1]);
+        assert_ne!(signatures[1], signatures[2]);
+        for mut ball in [
+            Ball::bomb(),
+            Ball::stone(),
+            Ball::normal(1, overbalancing_core::BallColors::single(ColorId::RED)),
+        ] {
+            ball.weight = 0;
+            let visual = build(&ball, &mut meshes, &mut materials, 2.5);
+            assert_eq!(visual.kind, ball.kind);
+            assert_eq!(visual.weight, "0");
+        }
+    }
     #[test]
     fn first_six_colors_are_plain_then_twelve_cues_repeat_deterministically() {
         for id in 0..DISTINCT_BASE_COLORS {

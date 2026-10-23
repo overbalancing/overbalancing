@@ -138,6 +138,12 @@ pub enum BallKind {
     Bomb,
     /// Inert weight-five obstacle.
     Stone,
+    /// Weightless reward clearing the physical row of its activating cell.
+    RowLaser,
+    /// Weightless reward clearing its activating lane.
+    ColumnLaser,
+    /// Weightless reward setting all remaining weights in its lane to zero.
+    Feather,
 }
 impl Ball {
     /// Construct an ordinary colored ball; placement still validates its weight.
@@ -180,15 +186,41 @@ impl Ball {
             colors: BallColors::none(),
         }
     }
+    /// Create a weightless row-laser reward.
+    pub fn row_laser() -> Self {
+        Self {
+            kind: BallKind::RowLaser,
+            weight: 0,
+            colors: BallColors::none(),
+        }
+    }
+    /// Create a weightless column-laser reward.
+    pub fn column_laser() -> Self {
+        Self {
+            kind: BallKind::ColumnLaser,
+            weight: 0,
+            colors: BallColors::none(),
+        }
+    }
+    /// Create a weightless feather reward.
+    pub fn feather() -> Self {
+        Self {
+            kind: BallKind::Feather,
+            weight: 0,
+            colors: BallColors::none(),
+        }
+    }
     /// Validate kind-specific mass and palette invariants.
     pub fn is_valid(&self) -> bool {
         match self.kind {
-            BallKind::Normal => self.weight > 0 && (1..=3).contains(&self.colors.count()),
-            BallKind::SilverStar | BallKind::GoldStar => {
-                self.weight == 0 && self.colors.count() == 0
-            }
-            BallKind::Bomb => self.weight == 10 && self.colors.count() == 0,
-            BallKind::Stone => self.weight == 5 && self.colors.count() == 0,
+            BallKind::Normal => (1..=3).contains(&self.colors.count()),
+            BallKind::SilverStar
+            | BallKind::GoldStar
+            | BallKind::RowLaser
+            | BallKind::ColumnLaser
+            | BallKind::Feather => self.weight == 0 && self.colors.count() == 0,
+            BallKind::Bomb => matches!(self.weight, 0 | 10) && self.colors.count() == 0,
+            BallKind::Stone => matches!(self.weight, 0 | 5) && self.colors.count() == 0,
         }
     }
 }
@@ -469,7 +501,7 @@ mod tests {
         let before = board.clone();
         assert!(!board.place(LANE_COUNT, ball(1, ColorId::RED)));
         assert!(!board.place(usize::MAX, ball(1, ColorId::RED)));
-        assert!(!board.place(0, ball(0, ColorId::BLUE)));
+        assert!(!board.place(0, Ball::normal(0, BallColors::none())));
         assert_eq!(board, before);
         assert_eq!(board.stack(usize::MAX), None);
         assert_eq!(board.total(usize::MAX), 0);
