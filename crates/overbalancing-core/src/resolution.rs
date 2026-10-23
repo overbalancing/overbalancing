@@ -410,6 +410,12 @@ fn resolve_specials(
     }
     Ok(changed)
 }
+fn mark_clears(board: &Board, pending: &mut PendingClear) {
+    let geometry = matching::capacities(board);
+    let mut seeds = pending.cells.clone();
+    seeds.extend(matching::cascade_at(board, &geometry));
+    pending.cells = matching::expand_at(board, &geometry, &seeds);
+}
 fn prepare_phase(
     board: &mut Board,
     pending: &mut PendingClear,
@@ -418,7 +424,13 @@ fn prepare_phase(
     let mut outcome = empty_outcome();
     loop {
         resolve_specials(board, pending, &mut outcome)?;
-        outcome.compressed_count += compress(board, pending)?;
+        // Current capacities already reflect the landed weight's final tilt.
+        // Give those physical-row matches priority while the complete stacks
+        // still exist, before compression can erase a qualifying alignment.
+        mark_clears(board, pending);
+        if pending.cells.is_empty() {
+            outcome.compressed_count += compress(board, pending)?;
+        }
         launch_reversals(board, before, &mut outcome.flights, pending);
         before = balances(board);
         // A launch can change physical alignment. New special effects are resolved
@@ -427,19 +439,16 @@ fn prepare_phase(
             break;
         }
     }
-    let geometry = matching::capacities(board);
-    let mut seeds = pending.cells.clone();
-    seeds.extend(matching::cascade_at(board, &geometry));
-    pending.cells = matching::expand_at(board, &geometry, &seeds);
+    mark_clears(board, pending);
     outcome.game_over = pending.is_empty() && board.is_game_over();
     Ok(outcome)
 }
 /// Preview whether this exact landing emits a flight from its selected seesaw.
 /// Runs the real deterministic contact/compression/launch transaction on clones;
 /// invalid or unrepresentable landings return false without mutating any state.
-pub fn would_reverse(board: &Board, lane: usize, ball: &Ball) -> bool {
+pub fn would_reverse(board: &Board, pending: &PendingClear, lane: usize, ball: &Ball) -> bool {
     let mut candidate = board.clone();
-    let mut pending = PendingClear::default();
+    let mut pending = pending.clone();
     prepare_landing(&mut candidate, &mut pending, lane, ball.clone()).is_ok_and(|outcome| {
         outcome
             .flights
@@ -691,7 +700,7 @@ mod tests {
         assert_eq!(progression.score(), 500);
     }
     #[test]
-    fn compression_remaps_marked_cells_and_never_clears_a_stale_index() {
+    fn pending_clear_protects_five_followup_balls_from_premature_compression() {
         let (mut board, mut pending) = marked_four();
         let mut progression = progress();
         let mut compressed = 0;
@@ -701,9 +710,9 @@ mod tests {
             };
             compressed += outcome.compressed_count;
         }
-        assert_eq!(compressed, 1);
-        assert_eq!(pending.cells().len(), 4);
-        assert_eq!(board.stack(0), Some([ball(5, &[0])].as_slice()));
+        assert_eq!(compressed, 0);
+        assert_eq!(pending.cells().len(), 8);
+        assert_eq!(board.stack(0), Some(vec![ball(1, &[0]); 5].as_slice()));
         assert!(pending.cells().iter().all(|cell| {
             board
                 .stack(cell.lane)
@@ -713,7 +722,7 @@ mod tests {
             panic!("commit");
         };
         assert_eq!(outcome.points, 800);
-        assert_eq!(outcome.cleared_count, 4);
+        assert_eq!(outcome.cleared_count, 8);
         assert_eq!(weight(&board), 0);
     }
     #[test]
@@ -842,7 +851,7 @@ mod tests {
     }
 
     #[test]
-    fn combined_review_fixture_compresses_and_cascades_in_one_landing() {
+    fn combined_review_fixture_clears_the_full_uncompressed_joker_cascade() {
         let mut board = Board::default();
         for (lane, ids) in [
             (0, vec![0]),
@@ -860,12 +869,12 @@ mod tests {
         let Ok(outcome) = land(&mut board, &mut progress(), 6, ball(2, &[2])) else {
             panic!("review fixture");
         };
-        assert_eq!(outcome.compressed_count, 1);
-        assert_eq!(outcome.cleared_count, 6);
-        assert_eq!(outcome.points, 600);
+        assert_eq!(outcome.compressed_count, 0);
+        assert_eq!(outcome.cleared_count, 11);
+        assert_eq!(outcome.points, 1200);
         assert!(outcome.flights.is_empty());
-        assert_eq!(board.stack(6), Some([ball(6, &[2])].as_slice()));
-        assert_eq!(weight(&board), 6);
+        assert_eq!(board.stack(6), Some([].as_slice()));
+        assert_eq!(weight(&board), 0);
     }
 
     #[test]
@@ -976,7 +985,7 @@ mod tests {
         assert!(matching::cascade_cells(&no_seed).is_empty());
     }
     #[test]
-    fn compression_precedes_clear_and_can_suppress_an_old_horizontal_seed() {
+    fn horizontal_clear_wins_when_landing_also_completes_vertical_five() {
         let mut board = Board::default();
         for _ in 0..4 {
             assert!(board.place(0, ball(1, &[0])));
@@ -992,9 +1001,9 @@ mod tests {
         let Ok(outcome) = land(&mut board, &mut progression, 0, ball(1, &[0])) else {
             panic!("valid resolution");
         };
-        assert_eq!(outcome.compressed_count, 1);
-        assert_eq!(outcome.cleared_count, 0);
-        assert_eq!(progression.score(), 0);
+        assert_eq!(outcome.compressed_count, 0);
+        assert_eq!(outcome.cleared_count, 7);
+        assert_eq!(progression.score(), 700);
     }
     #[test]
     fn clearing_before_overflow_can_save_a_temporarily_full_stack() {
@@ -1515,16 +1524,51 @@ mod special_tests {
         board.place(0, ordinary(2, 0));
         board.place(1, ordinary(1, 1));
         let before = board.clone();
-        assert!(!would_reverse(&board, 1, &ordinary(1, 2))); // equal end weights
-        assert!(would_reverse(&board, 1, &ordinary(2, 2))); // strict reversal
-        assert!(!would_reverse(&board, 1, &Ball::silver_star()));
+        assert!(!would_reverse(
+            &board,
+            &PendingClear::default(),
+            1,
+            &ordinary(1, 2)
+        )); // equal end weights
+        assert!(would_reverse(
+            &board,
+            &PendingClear::default(),
+            1,
+            &ordinary(2, 2)
+        )); // strict reversal
+        assert!(!would_reverse(
+            &board,
+            &PendingClear::default(),
+            1,
+            &Ball::silver_star()
+        ));
         // A bomb contacting the existing ball destroys both sides instead of flipping.
-        assert!(!would_reverse(&board, 1, &Ball::bomb()));
-        assert!(!would_reverse(&board, LANE_COUNT, &ordinary(2, 2)));
+        assert!(!would_reverse(
+            &board,
+            &PendingClear::default(),
+            1,
+            &Ball::bomb()
+        ));
+        assert!(!would_reverse(
+            &board,
+            &PendingClear::default(),
+            LANE_COUNT,
+            &ordinary(2, 2)
+        ));
         assert_eq!(board, before);
         let empty = Board::default();
-        assert!(!would_reverse(&empty, 0, &ordinary(10, 0))); // balanced -> heavy
-        assert!(!would_reverse(&empty, 0, &Ball::bomb()));
+        assert!(!would_reverse(
+            &empty,
+            &PendingClear::default(),
+            0,
+            &ordinary(10, 0)
+        )); // balanced -> heavy
+        assert!(!would_reverse(
+            &empty,
+            &PendingClear::default(),
+            0,
+            &Ball::bomb()
+        ));
     }
     #[test]
     fn reversal_preview_handles_owned_star_launches_and_invalid_ball_invariants() {
@@ -1532,10 +1576,117 @@ mod special_tests {
         board.place(0, ordinary(2, 0));
         board.place(0, Ball::gold_star());
         board.place(1, ordinary(1, 1));
-        assert!(would_reverse(&board, 1, &ordinary(10, 2)));
+        assert!(would_reverse(
+            &board,
+            &PendingClear::default(),
+            1,
+            &ordinary(10, 2)
+        ));
         let mut invalid = Ball::silver_star();
         invalid.weight = 1;
-        assert!(!would_reverse(&board, 1, &invalid));
+        assert!(!would_reverse(
+            &board,
+            &PendingClear::default(),
+            1,
+            &invalid
+        ));
         assert_eq!(board.stack(0).map(<[Ball]>::len), Some(2));
+    }
+    #[test]
+    fn simultaneous_match_and_five_stay_uncompressed_until_animation_commit() {
+        let mut board = Board::default();
+        for _ in 0..4 {
+            board.place(0, ordinary(1, 0));
+        }
+        board.place(1, ordinary(1, 0));
+        board.place(2, ordinary(1, 8));
+        board.place(2, ordinary(1, 8));
+        board.place(2, ordinary(1, 0));
+        let mut pending = PendingClear::default();
+        let mut score = progression();
+        let effect = prepare_landing(&mut board, &mut pending, 0, ordinary(1, 0))
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(effect.compressed_count, 0);
+        assert_eq!(pending.cells().len(), 7);
+        assert_eq!(board.stack(0).map(<[Ball]>::len), Some(5));
+        assert_eq!(score.score(), 0);
+        let committed = commit_clear(&mut board, &mut score, &mut pending)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(committed.compressed_count, 0);
+        assert_eq!(committed.cleared_count, 7);
+        assert_eq!(score.score(), 700);
+        assert_eq!(board.total(0), 0);
+    }
+    #[test]
+    fn unrelated_five_waits_for_pending_clear_then_compresses_after_commit() {
+        let mut board = Board::default();
+        for lane in 0..3 {
+            board.place(lane, ordinary(1, 0));
+        }
+        for _ in 0..4 {
+            board.place(6, ordinary(1, 1));
+        }
+        let mut pending = PendingClear::default();
+        prepare_landing(&mut board, &mut pending, 3, ordinary(1, 0))
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let incoming = prepare_landing(&mut board, &mut pending, 6, ordinary(1, 1))
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(incoming.compressed_count, 0);
+        assert_eq!(board.stack(6).map(<[Ball]>::len), Some(5));
+        let committed = commit_clear(&mut board, &mut progression(), &mut pending)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(committed.points, 400);
+        assert_eq!(committed.compressed_count, 1);
+        assert_eq!(board.stack(6), Some([ordinary(5, 1)].as_slice()));
+    }
+    #[test]
+    fn no_match_still_compresses_rising_stack_before_launching_its_top() {
+        let mut board = Board::default();
+        for _ in 0..5 {
+            board.place(0, ordinary(1, 0));
+        }
+        board.place(1, ordinary(4, 1));
+        let effect = land(&mut board, &mut progression(), 1, ordinary(2, 2))
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(effect.compressed_count, 1);
+        assert_eq!(effect.flights.len(), 1);
+        assert_eq!(effect.flights[0].ball, ordinary(5, 0));
+        assert_eq!(effect.flights[0].distance, 1);
+        assert_eq!(effect.flights[0].destination, 1);
+        assert_eq!(board.total(0), 0);
+    }
+    #[test]
+    fn preview_clones_live_sticky_membership_instead_of_recompressing_protected_balls() {
+        let mut board = Board::default();
+        for _ in 0..4 {
+            board.place(0, ordinary(u32::MAX, 0));
+        }
+        board.place(1, ordinary(u32::MAX, 0));
+        board.place(2, ordinary(1, 1));
+        board.place(2, ordinary(1, 2));
+        board.place(2, ordinary(1, 0));
+        let mut pending = PendingClear::default();
+        prepare_landing(&mut board, &mut pending, 0, ordinary(u32::MAX, 0))
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert!(!pending.cells().is_empty());
+        for (color, weight) in [
+            (10, u32::MAX),
+            (11, u32::MAX),
+            (12, u32::MAX),
+            (13, u32::MAX - 1),
+        ] {
+            prepare_landing(&mut board, &mut pending, 1, ordinary(weight, color))
+                .unwrap_or_else(|error| panic!("{error:?}"));
+        }
+        let before = (board.clone(), pending.clone());
+        let held = ordinary(2, 20);
+        assert!(would_reverse(&board, &pending, 1, &held));
+        assert!(!would_reverse(&board, &PendingClear::default(), 1, &held));
+        assert_eq!((board.clone(), pending.clone()), before);
+        let real = prepare_landing(&mut board, &mut pending, 1, held)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(real.flights.len(), 1);
+        assert_eq!(real.compressed_count, 0);
+        assert_eq!(real.flights[0].ball.weight, u32::MAX);
     }
 }

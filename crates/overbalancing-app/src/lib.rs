@@ -834,13 +834,22 @@ fn redraw(
 }
 // Prediction runs only when board, chute or held supply changes. Animation only
 // touches these eight text colors; it never changes totals or the field resource.
-fn predict_reversal(field: Res<Playfield>, mut warning: ResMut<ReversalWarning>) {
-    if !field.is_changed() {
+fn predict_reversal(
+    field: Res<Playfield>,
+    clearing: Res<Clearing>,
+    mut warning: ResMut<ReversalWarning>,
+) {
+    if !field.is_changed() && !clearing.is_changed() {
         return;
     }
     warning.0 = (!field.game_over
         && field.error.is_none()
-        && resolution::would_reverse(&field.board, field.chute.lane(), field.supply.held()))
+        && resolution::would_reverse(
+            &field.board,
+            &clearing.pending,
+            field.chute.lane(),
+            field.supply.held(),
+        ))
     .then_some(field.chute.lane());
 }
 fn pulse_reversal(
@@ -1675,6 +1684,48 @@ mod tests {
         assert_eq!(app.world().resource::<ReversalWarning>().0, None);
     }
     #[test]
+    fn reversal_cache_uses_live_marks_and_refreshes_when_only_pending_changes() {
+        let mut field = test_field(NonZeroU32::MIN, 7);
+        let normal = |weight, id| Ball::normal(weight, BallColors::single(ColorId::new(id)));
+        for _ in 0..4 {
+            assert!(field.board.place(0, normal(u32::MAX, 0)));
+        }
+        assert!(field.board.place(1, normal(u32::MAX, 0)));
+        for id in [1, 2, 0] {
+            assert!(field.board.place(2, normal(1, id)));
+        }
+        let mut pending = resolution::PendingClear::default();
+        resolution::prepare_landing(&mut field.board, &mut pending, 0, normal(u32::MAX, 0))
+            .unwrap_or_else(|e| panic!("pending fixture {e:?}"));
+        for (index, weight) in [u32::MAX, u32::MAX, u32::MAX, u32::MAX - 1]
+            .into_iter()
+            .enumerate()
+        {
+            resolution::prepare_landing(
+                &mut field.board,
+                &mut pending,
+                1,
+                normal(weight, 10 + index as u32),
+            )
+            .unwrap_or_else(|e| panic!("pending fixture {e:?}"));
+        }
+        fixture_held(&mut field, normal(2, 20));
+        field.chute.shift(1);
+        let mut app = App::new();
+        app.insert_resource(field)
+            .insert_resource(Clearing {
+                pending,
+                deadline: None,
+            })
+            .init_resource::<ReversalWarning>()
+            .add_systems(Update, predict_reversal);
+        app.update();
+        assert_eq!(app.world().resource::<ReversalWarning>().0, Some(1));
+        app.world_mut().resource_mut::<Clearing>().pending = resolution::PendingClear::default();
+        app.update();
+        assert_eq!(app.world().resource::<ReversalWarning>().0, None);
+    }
+    #[test]
     fn splitmix_sequence_is_repeatable_and_distinct() {
         let mut random = Random(0);
         assert_eq!(random.next(), 0xe220a8397b1dcdaf);
@@ -2158,7 +2209,7 @@ mod tests {
         assert!(app.world().resource::<Motion>().active.is_none());
     }
     #[test]
-    fn puzzle_demo_compresses_then_clears_joker_bridge_for_six_hundred() {
+    fn puzzle_demo_clears_all_eleven_before_compression_for_twelve_hundred() {
         let (mut app, _) = input_app();
         *app.world_mut().resource_mut::<Playfield>() =
             puzzle_demo().unwrap_or_else(|e| panic!("fixture {e:?}"));
@@ -2166,33 +2217,25 @@ mod tests {
         key(&mut app, KeyCode::Space);
         step(&mut app, 0.17);
         assert_eq!(app.world().resource::<Playfield>().progression.score(), 0);
-        assert!(
+        // Matching wins priority: all five uncompressed yellows remain eligible
+        // to join the joker bridge, preserving their full score.
+        assert_eq!(
             app.world()
                 .resource::<Playfield>()
-                .feedback
-                .as_ref()
-                .is_some_and(|text| text.contains("5->1 x1"))
+                .board
+                .stack(6)
+                .map(<[Ball]>::len),
+            Some(5)
         );
         step(&mut app, 0.46);
         let field = app.world().resource::<Playfield>();
-        assert_eq!(field.progression.score(), 600);
-        assert_eq!(
-            field.board.stack(6),
-            Some(
-                [Ball {
-                    kind: BallKind::Normal,
-                    weight: 6,
-                    colors: BallColors::single(ColorId::YELLOW)
-                }]
-                .as_slice()
-            )
-        );
-        assert!((0..6).all(|lane| field.board.total(lane) == 0));
+        assert_eq!(field.progression.score(), 1200);
+        assert!((0..LANE_COUNT).all(|lane| field.board.stack(lane) == Some([].as_slice())));
         assert!(
             field
                 .feedback
                 .as_ref()
-                .is_some_and(|text| text.contains("Cleared 6 | +600"))
+                .is_some_and(|text| text.contains("Cleared 11 | +1200"))
         );
         assert!(!field.game_over);
     }
