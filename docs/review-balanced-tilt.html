@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="style.css"><title>Balanced tilt review · Overbalancing</title></head><body><header><a href="index.html">Overbalancing documentation</a></header><main>
+<h1>Balanced-to-heavy launch and three-gold review</h1>
+<p>On 2026-10-24, the UX engineer exercised two focused fixtures with actual X11 Down and Backspace input under Vulkan/Xvfb. Before, moving, settled, desktop and reset screenshots were captured at 390 × 844 and 1100 × 1000.</p>
+<h2>Balanced-to-heavy reaction</h2>
+<p>The balanced fixture starts with weight one on each side and held weight two. Dropping on the left makes its total three and launches the opposing blue weight-one ball. The application log records origin 1, destination 7 and distance 2 using zero-based lanes. The moving frame shows the airborne blue ball; the settled frame shows totals three on the left and one in the final lane. This verifies the balanced-to-heavy trigger in the tested fixture.</p>
+<h2>Three gold stars</h2>
+<p>The gold fixture starts with two horizontal gold stars and a held third, with two previously earned bonus rows. Down consumes the three-star group, raises the counter to Rows +3 and displays “3 rows earned.” The log records one expansion. All sixteen previews, the held chute, eight totals and expanded board remain readable at 390 pixels and desktop size without overlap. Backspace returns the board to empty with Rows +0.</p>
+<h2>Reproduce</h2>
+<pre><code>RUST_LOG=overbalancing_app=info cargo run --locked -p overbalancing-app --bin overbalancing -- --balanced-tilt-demo
+RUST_LOG=overbalancing_app=info cargo run --locked -p overbalancing-app --bin overbalancing -- --special-gold-demo</code></pre>
+<p>Press Down once, then Backspace to reset. These observations establish Linux fixture behavior and visual acceptance at the inspected sizes. They do not establish phone execution, all platform runtimes or customer acceptance. The selected-stack warning has separate verification evidence; these two fixture captures do not test its blink cycle.</p>
+</main></body></html>

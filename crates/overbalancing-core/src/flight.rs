@@ -13,7 +13,7 @@ pub enum LandingError {
     ZeroWeight,
 }
 
-/// A ball removed from a rising stack by one full weight reversal.
+/// A ball removed from a rising stack when the seesaw starts or reverses its tilt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Flight {
     /// Top ball removed from the rising stack.
@@ -27,12 +27,12 @@ pub struct Flight {
 }
 
 impl Board {
-    /// Land one ball and return at most one flight caused by a strict reversal.
+    /// Land one ball and return at most one flight caused by a new or reversed tilt.
     ///
-    /// Only left-heavy to right-heavy, or the reverse, launches a ball. The top
+    /// Starting from balance or reversing the heavy side launches a ball. The top
     /// ball of the rising side travels toward the newly heavier side by the
     /// absolute difference of the final side totals, wrapping over eight lanes.
-    /// Equal states do not trigger a launch. Removal itself triggers nothing.
+    /// Ending balanced does not launch. Removal itself triggers nothing.
     /// The caller owns an emitted ball until explicitly landing it again.
     pub fn land(&mut self, lane: usize, ball: Ball) -> Result<Option<Flight>, LandingError> {
         if lane >= LANE_COUNT {
@@ -46,14 +46,14 @@ impl Board {
         self.stacks[lane].push(ball);
         let after = self.balance(seesaw);
         let rightward = match (before, after) {
-            (Some(Balance::LeftHeavy), Some(Balance::RightHeavy)) => true,
-            (Some(Balance::RightHeavy), Some(Balance::LeftHeavy)) => false,
+            (Some(Balance::LeftHeavy | Balance::Balanced), Some(Balance::RightHeavy)) => true,
+            (Some(Balance::RightHeavy | Balance::Balanced), Some(Balance::LeftHeavy)) => false,
             _ => return Ok(None),
         };
         let left = seesaw * 2;
         let distance = self.total(left).abs_diff(self.total(left + 1));
         let origin = if rightward { left } else { left + 1 };
-        // A previously heavy stack necessarily contains a positive-weight ball.
+        // A balanced seesaw can rise with an empty stack.
         let Some(ball) = self.stacks[origin].pop() else {
             return Ok(None);
         };
@@ -177,14 +177,51 @@ mod tests {
         assert_eq!(board.stack(1), Some([ball(2), ball(2)].as_slice()));
     }
     #[test]
-    fn balanced_transitions_and_same_heavy_side_never_launch() {
+    fn ending_balanced_and_same_heavy_side_never_launch() {
         let mut board = Board::default();
         assert_eq!(board.land(0, ball(1)), Ok(None));
         assert_eq!(board.land(1, ball(1)), Ok(None));
-        assert_eq!(board.land(1, ball(1)), Ok(None));
-        assert_eq!(board.land(1, ball(3)), Ok(None));
-        assert_eq!(board.stack(0).map(<[Ball]>::len), Some(1));
-        assert_eq!(board.total(1), 5);
+        let mut board = Board::default();
+        assert_eq!(board.land(0, ball(1)), Ok(None));
+        assert_eq!(board.land(0, ball(3)), Ok(None));
+        assert_eq!(board.stack(1).map(<[Ball]>::len), Some(0));
+        assert_eq!(board.total(0), 4);
+    }
+    #[test]
+    fn balanced_seesaws_launch_only_the_rising_top_ball_in_both_directions() {
+        for (landing, origin, destination) in [(0, 1, 7), (7, 6, 0)] {
+            let mut board = Board::default();
+            board.place(landing, ball(3));
+            board.place(origin, ball(1));
+            board.place(origin, ball(2));
+            let emitted = board
+                .land(landing, ball(10))
+                .unwrap_or_else(|error| panic!("{error:?}"))
+                .unwrap_or_else(|| panic!("balanced tilt must launch"));
+            assert_eq!(emitted.origin, origin);
+            assert_eq!(emitted.destination, destination);
+            assert_eq!(emitted.distance, 10);
+            assert_eq!(emitted.ball, ball(2));
+            assert_eq!(board_count(&board) + 1, 4);
+            assert_eq!(board_weight(&board) + u64::from(emitted.ball.weight), 16);
+            assert_eq!(board.stack(origin), Some([ball(1)].as_slice()));
+        }
+    }
+    #[test]
+    fn balanced_weightless_stacks_launch_existing_ball_but_empty_sides_do_not() {
+        for (landing, origin, destination) in [(0, 1, 0), (1, 0, 1)] {
+            let mut board = Board::default();
+            assert_eq!(board.land(landing, ball(1)), Ok(None));
+            let mut board = Board::default();
+            board.place(origin, Ball::silver_star());
+            assert_eq!(board.land(landing, Ball::silver_star()), Ok(None));
+            let emitted = board
+                .land(landing, ball(1))
+                .unwrap_or_else(|error| panic!("{error:?}"))
+                .unwrap_or_else(|| panic!("weightless rising ball"));
+            assert_eq!((emitted.origin, emitted.destination), (origin, destination));
+            assert_eq!(emitted.ball, Ball::silver_star());
+        }
     }
     #[test]
     fn mirrored_flight_wraps_left_and_can_be_landed_explicitly() {

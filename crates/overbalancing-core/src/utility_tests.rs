@@ -159,8 +159,11 @@ fn real_clear_rewards_stay_on_original_trigger_lane_after_followups() {
 #[test]
 fn real_seventeen_ball_clear_earns_column_and_level_star_without_feather() {
     let mut board = reward_fixture(4, 4);
-    let effect = apply(&mut board, &mut progress(), 3, normal(1, 0));
+    // Start already tilted so this scenario isolates clear rewards from launching.
+    board.stacks[3][3] = normal(2, 0);
+    let effect = apply(&mut board, &mut progress(), 3, normal(0, 0));
     assert_eq!(effect.cleared_count, 17);
+    assert!(effect.flights.is_empty());
     assert_eq!(effect.points, 1700);
     assert_eq!(reward_count(&effect.rewards, BallKind::ColumnLaser), 1);
     assert_eq!(reward_count(&effect.rewards, BallKind::RowLaser), 0);
@@ -230,8 +233,10 @@ fn row_targets_use_physical_tilt_and_bonus_rows_with_score_only_damage() {
         assert_eq!(effect.points, 500);
         assert_eq!(score.remaining(), 1000);
         assert_eq!(score.level(), NonZeroU32::MIN);
-        assert_eq!(board.stack(2).map(<[Ball]>::len), Some(2));
+        assert_eq!(board.stack(2).map(<[Ball]>::len), Some(1));
         assert_eq!(board.stack(0).map(<[Ball]>::len), Some(2));
+        assert_eq!(effect.flights.len(), 1);
+        assert_eq!(effect.flights[0].ball, normal(1, 4));
         assert!(effect.rewards.is_empty());
     }
 }
