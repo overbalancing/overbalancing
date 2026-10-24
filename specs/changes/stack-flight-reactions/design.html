@@ -8,6 +8,7 @@
 <a href="../../../docs/index.html">Overbalancing documentation</a>
 </header>
 <main>
+<p>Rule revision, 2026-10-24: the <a href="../balanced-tilt-flights/proposal.html">balanced-tilt change</a> supersedes the full-reversal-only launch condition below. Tilting from balance also launches the rising top ball.</p>
 <h1>Flight design</h1>
 <p>Board::land validates lane and positive weight before mutation, captures prior balance, appends the arriving ball and evaluates the new balance. Only left-heavy to right-heavy or right-heavy to left-heavy is a launch. Balanced transitions and arrivals on an already heavier side settle normally.</p>
 <p>A Flight owns the removed top ball, origin lane, full u64 distance and wrapped destination. Distances wrap over the eight lanes of one board. Rightward travel adds distance; leftward travel subtracts it. Modulo is applied before narrowing to a lane index. A distance divisible by eight returns to the origin lane.</p>

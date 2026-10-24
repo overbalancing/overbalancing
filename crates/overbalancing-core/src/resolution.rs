@@ -203,8 +203,8 @@ fn launch_reversals(
 ) {
     for (seesaw, old) in before.into_iter().enumerate() {
         let rightward = match (old, board.balance(seesaw)) {
-            (Some(Balance::LeftHeavy), Some(Balance::RightHeavy)) => true,
-            (Some(Balance::RightHeavy), Some(Balance::LeftHeavy)) => false,
+            (Some(Balance::LeftHeavy | Balance::Balanced), Some(Balance::RightHeavy)) => true,
+            (Some(Balance::RightHeavy | Balance::Balanced), Some(Balance::LeftHeavy)) => false,
             _ => continue,
         };
         let left = seesaw * 2;
@@ -509,7 +509,7 @@ fn resolve_specials(
             changed = true;
             continue;
         }
-        let gold = horizontal_special(board, BallKind::GoldStar, 5);
+        let gold = horizontal_special(board, BallKind::GoldStar, 3);
         let consumed_gold = !gold.is_empty();
         if consumed_gold {
             let expansions = gold.len().min(3 - board.bonus_rows);
@@ -903,6 +903,51 @@ mod tests {
     }
 
     #[test]
+    fn balanced_tilt_resolution_and_preview_agree_for_both_directions_and_weightless_stars() {
+        for (landing, origin, destination) in [(0, 1, 7), (7, 6, 0)] {
+            for weightless in [false, true] {
+                let mut board = Board::default();
+                let rising = if weightless {
+                    Ball::silver_star()
+                } else {
+                    ball(3, &[1])
+                };
+                board.place(origin, rising.clone());
+                if !weightless {
+                    board.place(landing, ball(3, &[2]));
+                }
+                let before = board.clone();
+                let arriving = ball(10, &[3]);
+                assert!(would_reverse(
+                    &board,
+                    &PendingClear::default(),
+                    landing,
+                    &arriving
+                ));
+                assert_eq!(board, before);
+                let effect =
+                    prepare_landing(&mut board, &mut PendingClear::default(), landing, arriving)
+                        .unwrap_or_else(|error| panic!("{error:?}"));
+                assert_eq!(effect.flights.len(), 1);
+                let emitted = &effect.flights[0];
+                assert_eq!(
+                    (emitted.origin, emitted.destination, emitted.distance),
+                    (origin, destination, 10)
+                );
+                assert_eq!(emitted.ball, if weightless { Ball::bomb() } else { rising });
+                assert_eq!(
+                    emitted.edge_from,
+                    weightless.then_some(BallKind::SilverStar)
+                );
+                assert_eq!(
+                    weight(&board) + u64::from(emitted.ball.weight),
+                    weight(&before) + 10 + if weightless { 10 } else { 0 }
+                );
+                assert!(board.stack(origin).is_some_and(|stack| stack.is_empty()));
+            }
+        }
+    }
+    #[test]
     fn marked_balls_stay_visible_scoreless_and_accept_followup_despite_new_tilt() {
         let (mut board, mut pending) = marked_four();
         let mut progression = progress();
@@ -911,26 +956,29 @@ mod tests {
         let Ok(prepared) = prepare_landing(&mut board, &mut pending, 0, ball(1, &[0])) else {
             panic!("followup");
         };
+        assert_eq!(prepared.flights.len(), 1);
+        assert_eq!(prepared.flights[0].origin, 1);
+        assert_eq!(prepared.flights[0].ball, ball(1, &[0]));
         assert_eq!(prepared.points, 0);
         assert_eq!(prepared.cleared_count, 0);
-        assert_eq!(pending.cells().len(), 5);
-        assert_eq!(weight(&board), 5);
+        assert_eq!(pending.cells().len(), 4);
+        assert_eq!(weight(&board), 4);
         // The original horizontal seed is gone after this tilt, but committed
         // animation membership is retained and its vertical neighbor joins.
         assert!(matching::cascade_cells(&board).is_empty());
         let Ok(committed) = commit_clear(&mut board, &mut progression, &mut pending) else {
             panic!("commit");
         };
-        assert_eq!(committed.points, 500);
-        assert_eq!(committed.cleared_count, 5);
-        assert_eq!(progression.score(), 500);
+        assert_eq!(committed.points, 400);
+        assert_eq!(committed.cleared_count, 4);
+        assert_eq!(progression.score(), 400);
         assert_eq!(weight(&board), 0);
         assert!(pending.is_empty());
         assert_eq!(
             commit_clear(&mut board, &mut progression, &mut pending).map(|outcome| outcome.points),
             Ok(0)
         );
-        assert_eq!(progression.score(), 500);
+        assert_eq!(progression.score(), 400);
     }
     #[test]
     fn pending_clear_protects_five_followup_balls_from_premature_compression() {
@@ -944,7 +992,7 @@ mod tests {
             compressed += outcome.compressed_count;
         }
         assert_eq!(compressed, 0);
-        assert_eq!(pending.cells().len(), 8);
+        assert_eq!(pending.cells().len(), 7);
         assert_eq!(board.stack(0), Some(vec![ball(1, &[0]); 5].as_slice()));
         assert!(pending.cells().iter().all(|cell| {
             board
@@ -954,34 +1002,72 @@ mod tests {
         let Ok(outcome) = commit_clear(&mut board, &mut progression, &mut pending) else {
             panic!("commit");
         };
-        assert_eq!(outcome.points, 800);
-        assert_eq!(outcome.cleared_count, 8);
+        assert_eq!(outcome.points, 700);
+        assert_eq!(outcome.cleared_count, 7);
         assert_eq!(weight(&board), 0);
     }
     #[test]
     fn emitting_a_marked_top_ball_removes_only_its_mark_and_preserves_ownership() {
         let (mut board, mut pending) = marked_four();
         let mut progression = progress();
-        assert!(prepare_landing(&mut board, &mut pending, 0, ball(1, &[0])).is_ok());
+        let board_count = |board: &Board| board.stacks.iter().map(Vec::len).sum::<usize>();
+        let initial_count = board_count(&board);
+        let initial_weight = weight(&board);
+        let Ok(first) = prepare_landing(&mut board, &mut pending, 0, ball(1, &[0])) else {
+            panic!("first followup");
+        };
+        assert_eq!(first.flights.len(), 1);
+        assert_eq!(first.flights[0].origin, 1);
+        assert_eq!(first.flights[0].ball, ball(1, &[0]));
+        assert_eq!(first.compressed_count, 0);
+        assert_eq!(first.cleared_count, 0);
+        assert_eq!(board_count(&board) + first.flights.len(), initial_count + 1);
+        assert_eq!(
+            weight(&board) + u64::from(first.flights[0].ball.weight),
+            initial_weight + 1
+        );
         let Ok(outcome) = prepare_landing(&mut board, &mut pending, 1, ball(3, &[0])) else {
-            panic!("followup");
+            panic!("second followup");
         };
         assert_eq!(outcome.flights.len(), 1);
         assert_eq!(outcome.flights[0].origin_index, 1);
+        assert_eq!(outcome.compressed_count, 0);
+        assert_eq!(outcome.cleared_count, 0);
         assert!(
             !pending
                 .cells()
                 .contains(&matching::Cell { lane: 0, index: 1 })
         );
+        let mut owned = first.flights;
+        owned.extend(outcome.flights);
+        assert_eq!(owned.len(), 2);
+        let owned_weight = |flights: &[ResolvedFlight]| {
+            flights
+                .iter()
+                .map(|flight| u64::from(flight.ball.weight))
+                .sum::<u64>()
+        };
+        assert_eq!(board_count(&board) + owned.len(), initial_count + 2);
         assert_eq!(
-            weight(&board) + u64::from(outcome.flights[0].ball.weight),
-            8
+            weight(&board) + owned_weight(&owned),
+            initial_weight + 1 + 3
         );
         let Ok(clear) = commit_clear(&mut board, &mut progression, &mut pending) else {
             panic!("commit");
         };
-        assert_eq!(clear.points, 700);
-        assert_eq!(weight(&board), 0);
+        owned.extend(clear.flights);
+        assert_eq!(clear.points, 300);
+        assert_eq!(clear.cleared_count, 3);
+        assert_eq!(clear.compressed_count, 0);
+        assert_eq!(weight(&board), 3);
+        assert_eq!(
+            board_count(&board) + owned.len() + clear.cleared_count,
+            initial_count + 2
+        );
+        assert_eq!(
+            weight(&board) + owned_weight(&owned) + clear.points / 100,
+            initial_weight + 1 + 3
+        );
     }
     #[test]
     fn failed_prepare_and_commit_preserve_pending_membership_and_state() {
@@ -1006,7 +1092,7 @@ mod tests {
         assert_eq!(progression, score);
         // A different-color followup does not automatically enter a sticky group.
         assert!(prepare_landing(&mut board, &mut pending, 0, ball(1, &[99])).is_ok());
-        assert_eq!(pending.cells().len(), 4);
+        assert_eq!(pending.cells().len(), 3);
     }
 
     #[test]
@@ -1052,11 +1138,20 @@ mod tests {
         let Ok(outcome) = land(&mut board, &mut progress(), 1, ball(2, &[50])) else {
             panic!("valid resolution");
         };
-        assert_eq!(outcome.flights.len(), 1);
+        assert_eq!(outcome.flights.len(), 2);
         assert_eq!(outcome.flights[0].ball.weight, 3);
         assert_eq!(outcome.cleared_count, 3);
         assert_eq!(outcome.points, 300);
-        assert_eq!(weight(&board) + 3 + outcome.points / 100, initial + 2);
+        assert_eq!(
+            weight(&board)
+                + outcome
+                    .flights
+                    .iter()
+                    .map(|flight| u64::from(flight.ball.weight))
+                    .sum::<u64>()
+                + outcome.points / 100,
+            initial + 2
+        );
     }
 
     #[test]
@@ -1458,7 +1553,7 @@ mod special_tests {
         let mut board = Board::default();
         board.place(0, ordinary(10, 1));
         board.place(1, Ball::bomb()); // balanced pair, row one
-        for lane in 2..7 {
+        for lane in 2..5 {
             board.place(lane, Ball::gold_star());
         }
         // Bomb's upper neighbor is at physical row two; adjacent gold starts row one.
@@ -1523,10 +1618,10 @@ mod special_tests {
         board.place(7, ordinary(4, 2));
         let before = position(&board, matching::Cell { lane: 7, index: 0 });
         for expected in 1..=3 {
-            for lane in 0..4 {
+            for lane in 0..2 {
                 board.place(lane, Ball::gold_star());
             }
-            let effect = land(&mut board, &mut score, 4, Ball::gold_star())
+            let effect = land(&mut board, &mut score, 2, Ball::gold_star())
                 .unwrap_or_else(|error| panic!("{error:?}"));
             assert_eq!(effect.expansions, 1);
             assert_eq!(board.bonus_rows(), expected);
@@ -1538,11 +1633,11 @@ mod special_tests {
             assert_eq!(board.expansion_achievement(), expected == 3);
             assert_eq!(score.score(), 0);
         }
-        for lane in 0..4 {
+        for lane in 0..2 {
             board.place(lane, Ball::gold_star());
         }
         assert_eq!(
-            land(&mut board, &mut score, 4, Ball::gold_star())
+            land(&mut board, &mut score, 2, Ball::gold_star())
                 .unwrap_or_else(|error| panic!("{error:?}"))
                 .expansions,
             0
@@ -1557,6 +1652,25 @@ mod special_tests {
         board.clear();
         assert_eq!(board.bonus_rows(), 0);
         assert!(!board.expansion_achievement());
+    }
+    #[test]
+    fn two_horizontal_gold_stars_wait_for_the_third_before_expanding() {
+        let mut board = Board::default();
+        let mut score = progression();
+        board.place(0, Ball::gold_star());
+        let pair = land(&mut board, &mut score, 1, Ball::gold_star())
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(pair.expansions, 0);
+        assert_eq!(pair.cleared_count, 0);
+        assert_eq!(board.bonus_rows(), 0);
+        assert_eq!(count(&board), 2);
+        let triple = land(&mut board, &mut score, 2, Ball::gold_star())
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(triple.expansions, 1);
+        assert_eq!(triple.cleared_count, 3);
+        assert_eq!(board.bonus_rows(), 1);
+        assert_eq!(count(&board), 0);
+        assert_eq!(score.score(), 0);
     }
     #[test]
     fn six_gold_in_one_row_are_all_consumed_for_one_expansion() {
@@ -1727,7 +1841,7 @@ mod special_tests {
     #[test]
     fn independent_gold_rows_each_earn_one_expansion_but_long_run_only_one() {
         let mut board = Board::default();
-        for lane in 0..5 {
+        for lane in 0..3 {
             for _ in 0..2 {
                 board.place(lane, Ball::gold_star());
             }
@@ -1736,7 +1850,7 @@ mod special_tests {
             .unwrap_or_else(|error| panic!("{error:?}"));
         assert_eq!(effect.expansions, 2);
         assert_eq!(board.bonus_rows(), 2);
-        assert_eq!(effect.cleared_count, 10);
+        assert_eq!(effect.cleared_count, 6);
         let mut board = Board::default();
         for lane in 0..7 {
             board.place(lane, Ball::gold_star());

@@ -293,13 +293,25 @@ fn special_demo(mode: &str) -> Result<Playfield, GenerationError> {
                 field
                     .board
                     .place(0, Ball::normal(2, BallColors::single(ColorId::BLUE)));
-                field.board.place(1, ordinary(7));
+                field
+                    .board
+                    .place(1, ordinary(if mode == "feather" { 8 } else { 7 }));
                 field.board.place(2, ordinary(1));
                 field.board.place(2, ordinary(1));
                 field.board.place(2, Ball::stone());
                 field.board.place(3, ordinary(7));
             }
             fixture_held(&mut field, utility);
+        }
+        "balanced-tilt" => {
+            field.board.place(0, ordinary(1));
+            field
+                .board
+                .place(1, Ball::normal(1, BallColors::single(ColorId::BLUE)));
+            fixture_held(
+                &mut field,
+                Ball::normal(2, BallColors::single(ColorId::YELLOW)),
+            );
         }
         "ultimate" => {
             field.board.place(1, ordinary(1));
@@ -335,7 +347,9 @@ fn special_demo(mode: &str) -> Result<Playfield, GenerationError> {
         "column-reward" => {
             for lane in 0..4 {
                 for _ in 0..4 {
-                    field.board.place(lane, ordinary(1));
+                    field
+                        .board
+                        .place(lane, ordinary(if lane == 3 { 2 } else { 1 }));
                 }
             }
             fixture_held(&mut field, ordinary(1));
@@ -371,25 +385,25 @@ fn special_demo(mode: &str) -> Result<Playfield, GenerationError> {
         }
         "gold" | "bonus" => {
             for _ in 0..if mode == "bonus" { 3 } else { 2 } {
-                for lane in 0..4 {
+                for lane in 0..2 {
                     field.board.place(lane, Ball::gold_star());
                 }
                 resolution::land(
                     &mut field.board,
                     &mut field.progression,
-                    4,
+                    2,
                     Ball::gold_star(),
                 )
                 .unwrap_or_else(|error| panic!("invalid expansion fixture {error:?}"));
             }
             field.board.place(7, Ball::stone());
             if mode == "gold" {
-                for lane in 0..4 {
+                for lane in 0..2 {
                     field.board.place(lane, Ball::gold_star());
                 }
             }
             fixture_held(&mut field, Ball::gold_star());
-            for _ in 0..4 {
+            for _ in 0..2 {
                 field.chute.shift(1);
             }
         }
@@ -468,6 +482,7 @@ pub fn run() {
         ("--special-bonus-demo", "bonus"),
         ("--special-edge-demo", "edge"),
         ("--warning-demo", "edge"),
+        ("--balanced-tilt-demo", "balanced-tilt"),
         ("--special-demo", "merge"),
     ]
     .into_iter()
@@ -1797,6 +1812,54 @@ mod tests {
         assert_eq!(app.world().resource::<ReversalWarning>().0, None);
     }
     #[test]
+    fn balanced_tilt_warning_predicts_owned_flight_in_both_directions_without_mutation() {
+        for landing in [0, 1] {
+            let (mut app, _) = input_app();
+            *app.world_mut().resource_mut::<Playfield>() =
+                special_demo("balanced-tilt").unwrap_or_else(|e| panic!("fixture {e:?}"));
+            if landing == 1 {
+                key(&mut app, KeyCode::ArrowRight);
+            } else {
+                key(&mut app, KeyCode::ArrowLeft);
+            }
+            let field = app.world().resource::<Playfield>();
+            let board = field.board.clone();
+            let supply = field.supply.clone();
+            assert_eq!(app.world().resource::<ReversalWarning>().0, Some(landing));
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+            app.world_mut().run_schedule(Update);
+            let field = app.world().resource::<Playfield>();
+            assert_eq!(field.board, board);
+            assert_eq!(field.supply, supply);
+            assert!(app.world().resource::<Motion>().active.is_none());
+            key(&mut app, KeyCode::ArrowDown);
+            let owned_mass = mass(
+                app.world().resource::<Playfield>(),
+                app.world().resource::<Motion>(),
+            );
+            step(&mut app, 0.17);
+            let field = app.world().resource::<Playfield>();
+            let motion = app.world().resource::<Motion>();
+            let flight = motion
+                .active
+                .as_ref()
+                .unwrap_or_else(|| panic!("tilt flight"));
+            assert_eq!(flight.ball.weight, 1);
+            assert_eq!(flight.destination, if landing == 0 { 7 } else { 2 });
+            assert!(
+                matches!(flight.path, Path::Launch { origin, distance: 2, rightward, .. }
+                if origin == 1 - landing && rightward == (landing == 1))
+            );
+            assert_eq!(field.board.total(landing), 3);
+            assert_eq!(field.board.total(1 - landing), 0);
+            assert_eq!(mass(field, motion), owned_mass);
+            assert!(motion.incoming.is_empty());
+            assert!(motion.queued.is_empty());
+        }
+    }
+    #[test]
     fn reversal_cache_uses_live_marks_and_refreshes_when_only_pending_changes() {
         let mut field = test_field(NonZeroU32::MIN, 7);
         let normal = |weight, id| Ball::normal(weight, BallColors::single(ColorId::new(id)));
@@ -1921,7 +1984,7 @@ mod tests {
         step(&mut app, 0.17);
         step(&mut app, 0.46);
         let field = app.world().resource::<Playfield>();
-        assert_eq!(field.progression.score(), 1700);
+        assert_eq!(field.progression.score(), 2100);
         assert_eq!(field.supply.held(), &held);
         assert!(queued_kinds(&field.supply, 3, 4).contains(&BallKind::ColumnLaser));
     }
@@ -2171,7 +2234,7 @@ mod tests {
         assert!(app.world().resource::<Motion>().active.is_none());
     }
     #[test]
-    fn untouched_raised_stack_ends_game_blocks_supply_and_reset_restores() {
+    fn balanced_tilt_launch_rescues_raised_stack_from_overflow_and_reset_restores() {
         let (mut app, _) = input_app();
         {
             let mut field = app.world_mut().resource_mut::<Playfield>();
@@ -2192,25 +2255,69 @@ mod tests {
         key(&mut app, KeyCode::Space);
         advance(&mut app);
         let field = app.world().resource::<Playfield>();
-        assert!(field.game_over);
+        assert!(!field.game_over);
         assert_eq!(field.board.capacity(0), Some(9));
         assert_eq!(field.board.capacity(1), Some(7));
-        assert_eq!(field.board.overflow(1), Some(1));
-        let stopped = field.supply.clone();
+        assert_eq!(field.board.overflow(1), Some(0));
+        assert_eq!(field.board.stack(1).map(<[Ball]>::len), Some(7));
         let state = field.random.0;
-        key(&mut app, KeyCode::Enter);
-        key(&mut app, KeyCode::ArrowRight);
-        key(&mut app, KeyCode::Space);
-        let field = app.world().resource::<Playfield>();
-        assert_eq!(field.supply, stopped);
-        assert_eq!(field.random.0, state);
-        assert_eq!(field.chute.lane(), 1);
         key(&mut app, KeyCode::Backspace);
         let field = app.world().resource::<Playfield>();
         assert!(!field.game_over);
         assert_eq!(field.board, Board::default());
         assert_eq!(field.chute.lane(), 0);
         assert_ne!(field.random.0, state);
+    }
+    #[test]
+    fn already_heavy_stack_overflow_blocks_drops_without_consumption_until_reset() {
+        let (mut app, _) = input_app();
+        {
+            let mut field = app.world_mut().resource_mut::<Playfield>();
+            for row in 0..9 {
+                assert!(field.board.place(
+                    0,
+                    Ball::normal(1, BallColors::single(ColorId::new(row % 2)))
+                ));
+            }
+            fixture_held(
+                &mut field,
+                Ball::normal(1, BallColors::single(ColorId::YELLOW)),
+            );
+            assert!(!field.board.is_game_over());
+        }
+        key(&mut app, KeyCode::ArrowDown);
+        step(&mut app, 0.17);
+        let field = app.world().resource::<Playfield>();
+        assert!(field.game_over);
+        assert_eq!(field.board.capacity(0), Some(9));
+        assert_eq!(field.board.stack(0).map(<[Ball]>::len), Some(10));
+        assert_eq!(field.board.overflow(0), Some(1));
+        assert!(app.world().resource::<Motion>().active.is_none());
+        assert!(app.world().resource::<Motion>().queued.is_empty());
+        let board = field.board.clone();
+        let supply = field.supply.clone();
+        let random = field.random.0;
+        // Inspecting another target remains available, but neither input path
+        // may refill, generate or create a new owned transit after the loss.
+        key(&mut app, KeyCode::ArrowRight);
+        assert_eq!(app.world().resource::<Playfield>().chute.lane(), 1);
+        for keycode in [KeyCode::ArrowDown, KeyCode::Space, KeyCode::Enter] {
+            key(&mut app, keycode);
+        }
+        advance(&mut app);
+        let field = app.world().resource::<Playfield>();
+        assert_eq!(field.board, board);
+        assert_eq!(field.supply, supply);
+        assert_eq!(field.random.0, random);
+        assert!(app.world().resource::<Motion>().active.is_none());
+        assert!(app.world().resource::<Motion>().incoming.is_empty());
+        key(&mut app, KeyCode::Backspace);
+        let field = app.world().resource::<Playfield>();
+        assert!(!field.game_over);
+        assert_eq!(field.board, Board::default());
+        assert_eq!(field.chute.lane(), 0);
+        assert_ne!(field.random.0, random);
+        assert!(app.world().resource::<Clearing>().pending.is_empty());
     }
     fn ball(weight: u32) -> Ball {
         Ball {
@@ -2663,7 +2770,7 @@ mod tests {
         app
     }
     #[test]
-    fn fast_followup_joins_fixed_clear_window_and_awards_five_hundred_once() {
+    fn fast_followup_keeps_clear_deadline_while_launching_a_marked_ball() {
         let mut app = begin_four_clear();
         let deadline = app.world().resource::<Clearing>().deadline;
         for _ in 0..3 {
@@ -2672,15 +2779,15 @@ mod tests {
         key(&mut app, KeyCode::ArrowDown);
         step(&mut app, 0.17);
         assert_eq!(app.world().resource::<Clearing>().deadline, deadline);
-        assert_eq!(app.world().resource::<Clearing>().pending.cells().len(), 5);
+        assert_eq!(app.world().resource::<Clearing>().pending.cells().len(), 4);
         assert_eq!(app.world().resource::<Playfield>().progression.score(), 0);
         step(&mut app, 0.28);
         let field = app.world().resource::<Playfield>();
-        assert_eq!(field.progression.score(), 500);
-        assert_eq!(field.board, Board::default());
+        assert_eq!(field.progression.score(), 400);
+        assert_eq!(mass(field, app.world().resource::<Motion>()), 1);
         assert!(app.world().resource::<Clearing>().pending.is_empty());
         advance(&mut app);
-        assert_eq!(app.world().resource::<Playfield>().progression.score(), 500);
+        assert_eq!(app.world().resource::<Playfield>().progression.score(), 400);
     }
     #[test]
     fn arrival_after_clear_deadline_stays_a_normal_new_ball() {
