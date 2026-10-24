@@ -144,6 +144,8 @@ pub enum BallKind {
     ColumnLaser,
     /// Weightless reward setting all remaining weights in its lane to zero.
     Feather,
+    /// Weightless earned wildcard matching every ordinary palette color.
+    UltimateJoker,
 }
 impl Ball {
     /// Construct an ordinary colored ball; placement still validates its weight.
@@ -210,6 +212,14 @@ impl Ball {
             colors: BallColors::none(),
         }
     }
+    /// Create a weightless universal-color joker, without a fabricated palette ID.
+    pub fn ultimate_joker() -> Self {
+        Self {
+            kind: BallKind::UltimateJoker,
+            weight: 0,
+            colors: BallColors::none(),
+        }
+    }
     /// Validate kind-specific mass and palette invariants.
     pub fn is_valid(&self) -> bool {
         match self.kind {
@@ -218,7 +228,8 @@ impl Ball {
             | BallKind::GoldStar
             | BallKind::RowLaser
             | BallKind::ColumnLaser
-            | BallKind::Feather => self.weight == 0 && self.colors.count() == 0,
+            | BallKind::Feather
+            | BallKind::UltimateJoker => self.weight == 0 && self.colors.count() == 0,
             BallKind::Bomb => matches!(self.weight, 0 | 10) && self.colors.count() == 0,
             BallKind::Stone => matches!(self.weight, 0 | 5) && self.colors.count() == 0,
         }
