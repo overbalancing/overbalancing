@@ -383,8 +383,12 @@ fn special_demo(mode: &str) -> Result<Playfield, GenerationError> {
                 field.chute.shift(1);
             }
         }
-        "gold" | "bonus" => {
-            for _ in 0..if mode == "bonus" { 3 } else { 2 } {
+        "gold" | "bonus" | "bonus-rows" => {
+            for _ in 0..if mode == "bonus" || mode == "bonus-rows" {
+                3
+            } else {
+                2
+            } {
                 for lane in 0..2 {
                     field.board.place(lane, Ball::gold_star());
                 }
@@ -401,6 +405,30 @@ fn special_demo(mode: &str) -> Result<Playfield, GenerationError> {
                 for lane in 0..2 {
                     field.board.place(lane, Ball::gold_star());
                 }
+            }
+            if mode == "bonus-rows" {
+                for (lane, count) in [(0, 12), (2, 11), (3, 11), (4, 10)] {
+                    for row in 0..count {
+                        field.board.place(
+                            lane,
+                            if row % 2 == 0 {
+                                Ball::stone()
+                            } else {
+                                Ball::normal(
+                                    1,
+                                    BallColors::single(ColorId::new(
+                                        (row % 3) as u32 + lane as u32 * 10,
+                                    )),
+                                )
+                            },
+                        );
+                    }
+                }
+            }
+            if mode == "bonus-rows" {
+                field
+                    .board
+                    .place(5, Ball::normal(100, BallColors::single(ColorId::BLUE)));
             }
             fixture_held(&mut field, Ball::gold_star());
             for _ in 0..2 {
@@ -479,6 +507,7 @@ pub fn run() {
         ("--special-bomb-demo", "bomb"),
         ("--special-silver-demo", "silver"),
         ("--special-gold-demo", "gold"),
+        ("--bonus-rows-demo", "bonus-rows"),
         ("--special-bonus-demo", "bonus"),
         ("--special-edge-demo", "edge"),
         ("--warning-demo", "edge"),
@@ -808,7 +837,7 @@ fn redraw(
             .unwrap_or(&[])
             .iter()
             .skip(field.offset)
-            .take(9)
+            .take(visible_rows(&field.board))
             .enumerate()
         {
             draw_ball(
@@ -960,6 +989,9 @@ fn pulse_reversal(
         };
     }
 }
+fn visible_rows(board: &Board) -> usize {
+    9 + board.bonus_rows()
+}
 fn pan(
     mut wheels: MessageReader<bevy::input::mouse::MouseWheel>,
     touches: Res<Touches>,
@@ -999,8 +1031,8 @@ fn pan(
         .filter_map(|lane| field.board.stack(lane).map(<[Ball]>::len))
         .max()
         .unwrap_or(0)
-        .saturating_sub(9);
-    if rows != 0 {
+        .saturating_sub(visible_rows(&field.board));
+    if rows != 0 || field.offset > max {
         field.offset = field.offset.saturating_add_signed(rows as isize).min(max);
     }
 }
@@ -2072,6 +2104,97 @@ mod tests {
         assert!(
             !queued_kinds(&app.world().resource::<Playfield>().supply, 5, 5)
                 .contains(&BallKind::UltimateJoker)
+        );
+    }
+    #[test]
+    fn expanded_rows_spawn_all_stack_entities_and_scroll_with_original_identities() {
+        let (mut app, _) = input_app();
+        *app.world_mut().resource_mut::<Playfield>() =
+            special_demo("bonus-rows").unwrap_or_else(|e| panic!("fixture {e:?}"));
+        {
+            let field = app.world().resource::<Playfield>();
+            assert_eq!(field.board.capacity(0), Some(12));
+            assert_eq!(field.board.capacity(2), Some(11));
+            assert_eq!(field.board.capacity(4), Some(10));
+        }
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<ColorMaterial>>()
+            .add_systems(Update, redraw.after(predict_reversal));
+        app.world_mut().run_schedule(Update);
+        let cells = |app: &mut App, lane| {
+            let mut query = app.world_mut().query::<(&StackBall, &Transform)>();
+            let mut rows = query
+                .iter(app.world())
+                .filter(|(cell, _)| cell.0.lane == lane)
+                .map(|(cell, transform)| (cell.0.index, transform.translation.y))
+                .collect::<Vec<_>>();
+            rows.sort_by_key(|row| row.0);
+            rows
+        };
+        for (lane, count) in [(0, 12), (2, 11), (4, 10)] {
+            let rows = cells(&mut app, lane);
+            assert_eq!(rows.len(), count);
+            let field = app.world().resource::<Playfield>();
+            for (index, y) in rows {
+                assert_eq!(
+                    y,
+                    platform_y(&field.board, lane) + ROW_HEIGHT / 2.0 + index as f32 * ROW_HEIGHT
+                );
+            }
+        }
+        let unscrolled_board = app.world().resource::<Playfield>().board.clone();
+        key(&mut app, KeyCode::ArrowUp);
+        assert_eq!(app.world().resource::<Playfield>().offset, 0);
+        for _ in 0..3 {
+            app.world_mut()
+                .resource_mut::<Playfield>()
+                .board
+                .place(0, Ball::stone());
+        }
+        for _ in 0..5 {
+            key(&mut app, KeyCode::ArrowUp);
+        }
+        assert_eq!(app.world().resource::<Playfield>().offset, 3);
+        assert_eq!(
+            cells(&mut app, 0)
+                .iter()
+                .map(|row| row.0)
+                .collect::<Vec<_>>(),
+            (3..15).collect::<Vec<_>>()
+        );
+        app.world_mut().resource_mut::<Playfield>().board = unscrolled_board;
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut().run_schedule(Update);
+        assert_eq!(app.world().resource::<Playfield>().offset, 0);
+        assert_eq!(
+            cells(&mut app, 0)
+                .iter()
+                .map(|row| row.0)
+                .collect::<Vec<_>>(),
+            (0..12).collect::<Vec<_>>()
+        );
+        *app.world_mut().resource_mut::<Playfield>() = test_field(NonZeroU32::MIN, 7);
+        for _ in 0..12 {
+            app.world_mut()
+                .resource_mut::<Playfield>()
+                .board
+                .place(0, Ball::stone());
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut().run_schedule(Update);
+        assert_eq!(cells(&mut app, 0).len(), 9);
+        key(&mut app, KeyCode::ArrowUp);
+        assert_eq!(app.world().resource::<Playfield>().offset, 1);
+        assert_eq!(
+            cells(&mut app, 0)
+                .iter()
+                .map(|row| row.0)
+                .collect::<Vec<_>>(),
+            (1..10).collect::<Vec<_>>()
         );
     }
     #[test]
